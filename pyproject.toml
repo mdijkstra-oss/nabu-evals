@@ -1,0 +1,23 @@
+[project]
+name = "nabu-evals"
+version = "0.1.0"
+description = "Automatic prompt evaluation and optimization for Nabu"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "gepa==0.1.4",
+]
+
+[project.scripts]
+nabu-evals = "nabu_evals:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "ruff>=0.16.5",
+]
