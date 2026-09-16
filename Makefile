@@ -5,7 +5,7 @@ BRIDGE_URL ?=
 CHANCERY_PORT ?= 8081
 MODEL_TABLE ?=
 
-.PHONY: dev check test optimize campaign
+.PHONY: dev check test optimize campaign report
 
 dev:
 	uv run python -m nabu_evals.dev --prompts "$(PROMPTS)" --chancery-bin "$(CHANCERY)" --dragoman-bin "$(DRAGOMAN)" --chancery-port "$(CHANCERY_PORT)" $(if $(BRIDGE_URL),--bridge-url "$(BRIDGE_URL)") $(if $(MODEL_TABLE),--model-table "$(MODEL_TABLE)")
@@ -23,3 +23,6 @@ optimize:
 
 campaign:
 	uv run nabu-evals campaign $(ARGS)
+
+report:
+	uv run nabu-evals report $(ARGS)

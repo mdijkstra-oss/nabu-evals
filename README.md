@@ -27,6 +27,14 @@ make campaign ARGS="--development-root /path/to/development-a --development-root
 
 The campaign runs the existing optimizer only on development roots, then scores its best candidate and the baseline on comparison roots. It accepts the candidate only when mean comparison F1 rises and no comparison root regresses. `comparison.json` records the decision and per-root deltas. `selected-coding-guidance.md` holds the accepted candidate or the retained baseline; the source prompt remains unchanged.
 
+After a completed campaign, render a portable summary image:
+
+```sh
+uv run nabu-evals report /path/to/campaign-output
+```
+
+This writes `evaluation-report.png` beside the run. Its left chart shows every candidate's development score; its right chart shows the original prompt versus the development winner on the protected comparison set, and whether that winner was selected. Use `--output /path/to/report.png` to write it elsewhere.
+
 Each gold root must contain `framework.md`, `codes/*.md`, and `corpus/*.md`. The framework contains shared Markdown without callouts; every code file contains one `json-callout` definition. Every corpus document must have exactly one `json-annotations` block, and code callout IDs must be unique and cover every gold annotation code.
 
 ## Generate gold roots
@@ -56,6 +64,7 @@ make check     # Ruff and Pyright
 make test      # pytest
 make optimize ARGS="..."
 make campaign ARGS="..."
+make report ARGS="/path/to/campaign-output"
 uv run nabu-evals generate <source> ...
 ```
 

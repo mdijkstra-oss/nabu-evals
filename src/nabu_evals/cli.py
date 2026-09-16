@@ -19,6 +19,7 @@ from nabu_evals.optimizer import (
     OptimizerSettings,
     run_optimizer,
 )
+from nabu_evals.report import render_campaign_report
 from nabu_evals.runtime import RuntimeFailure
 
 
@@ -58,6 +59,11 @@ def _parser() -> argparse.ArgumentParser:
         "--comparison-root", type=Path, action="append", required=True
     )
     _add_runtime_options(campaign)
+    report = commands.add_parser(
+        "report", help="render a completed campaign's scores and decision as a PNG"
+    )
+    report.add_argument("run_directory", metavar="RUN_DIRECTORY", type=Path)
+    report.add_argument("--output", type=Path)
     generate = commands.add_parser(
         "generate",
         help="generate normal gold roots from raw datasets or legacy codebooks",
@@ -192,6 +198,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             _optimize(args)
         if args.command == "campaign":
             _campaign(args)
+        if args.command == "report":
+            render_campaign_report(args.run_directory, args.output)
         if args.command == "generate":
             if args.generator == "migrate-codebook":
                 for root in args.gold_roots:
@@ -207,6 +215,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         OSError,
         RuntimeFailure,
         RuntimeError,
+        TypeError,
         ValueError,
     ) as error:
         print(str(error), file=sys.stderr)
