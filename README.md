@@ -20,11 +20,21 @@ Run one closed optimization loop against one or more already-prepared gold roots
 make optimize ARGS="/path/to/gold-small --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery --dragoman-bin /path/to/dragoman"
 ```
 
+Run a campaign when development and protected comparison roots are available:
+
+```sh
+make campaign ARGS="--development-root /path/to/development-a --development-root /path/to/development-b --comparison-root /path/to/comparison-a --comparison-root /path/to/comparison-b --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery --dragoman-bin /path/to/dragoman"
+```
+
+The campaign runs the existing optimizer only on development roots, then scores its best candidate and the baseline on comparison roots. It accepts the candidate only when mean comparison F1 rises and no comparison root regresses. `comparison.json` records the decision and per-root deltas. `selected-coding-guidance.md` holds the accepted candidate or the retained baseline; the source prompt remains unchanged.
+
 Each gold root must contain `framework.md`, `codes/*.md`, and `corpus/*.md`. The framework contains shared Markdown without callouts; every code file contains one `json-callout` definition. Every corpus document must have exactly one `json-annotations` block, and code callout IDs must be unique and cover every gold annotation code.
 
 ## Generate gold roots
 
 Nabu-evals owns the benchmark format and its source importers. They produce the same normal coding files that the frontend receives during an evaluation:
+
+See [gold-standards.md](gold-standards.md) for how to construct representative, independent, budget-appropriate roots and split them into development and protected comparison suites.
 
 ```sh
 uv run nabu-evals generate migrate-codebook /path/to/legacy-gold-root
@@ -35,7 +45,7 @@ uv run nabu-evals generate epitome /path/to/epitome-dataset /new/gold-root
 
 During an optimization run, nabu-evals validates a gold root, builds a normal coding job from its framework, code files, and corpus prose, then asks nabu-frontend only to run that job. Nabu-evals retains the gold annotations and owns scoring, diagnostics, and run artifacts.
 
-The output is labelled as an optimization-set proposal. It includes both candidates even when the baseline remains best; no holdout or generalization claim is made.
+The `optimize` output is labelled as an optimization-set proposal. It includes both candidates even when the baseline remains best; no holdout or generalization claim is made. Use `campaign` to add the protected comparison check.
 
 `--reflection-model` defaults to the Claude CLI `opus` alias. Set an exact Opus model ID when reproducible model selection is required.
 
@@ -46,6 +56,7 @@ make dev       # native Dragoman plus watched Chancery for manual prompt work
 make check     # Ruff and Pyright
 make test      # pytest
 make optimize ARGS="..."
+make campaign ARGS="..."
 uv run nabu-evals generate <source> ...
 ```
 

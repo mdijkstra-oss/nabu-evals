@@ -160,3 +160,43 @@ sequenceDiagram
     end
   end
 ```
+
+## Figure 4: Evaluation campaign command
+
+[Figure 1](#figure-1-the-optimization-loop) is the existing optimizer. The `campaign` command wraps it without changing it: development roots generate a winner; comparison roots score only the baseline and that winner. The candidate passes only when mean comparison F1 rises and no comparison root regresses. Comparison results never become reflection input.
+
+```mermaid
+flowchart LR
+  development[(Development roots)]
+  comparison[(Protected comparison roots)]
+  baseline[(Baseline guidance)]
+
+  subgraph campaign["Campaign command"]
+    optimize[Run existing optimizer]
+    winner[(Read best development candidate)]
+    compare[Score baseline and winner\non comparison roots]
+    guard{Comparison guard\npasses?}
+    accept[(Write selected candidate guidance)]
+    retain[(Write selected baseline guidance)]
+
+    optimize --> winner --> compare --> guard
+    guard -->|yes| accept
+    guard -->|no| retain
+  end
+
+  development --> optimize
+  baseline --> optimize
+  baseline --> compare
+  comparison --> compare
+
+  classDef root fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
+  classDef existing fill:#f3e8ff,stroke:#7e22ce,color:#581c87
+  classDef proposed fill:#dcfce7,stroke:#16a34a,color:#14532d
+  classDef decision fill:#fef3c7,stroke:#d97706,color:#78350f
+  classDef artifact fill:#fef3c7,stroke:#d97706,color:#78350f
+  class development,comparison,baseline root
+  class optimize,winner existing
+  class compare proposed
+  class guard decision
+  class accept,retain artifact
+```

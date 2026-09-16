@@ -62,11 +62,13 @@ class _Health(BaseHTTPRequestHandler):
         pass
 
 
-def test_optimize_accepts_multiple_uniform_gold_roots(tmp_path: Path) -> None:
+def test_campaign_scores_development_winner_on_protected_roots(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
+    comparison = tmp_path / "comparison"
     _write_gold_root(first, code="code-a", body="First numbered sentence.")
     _write_gold_root(second, code="code-b", body="Second numbered sentence.")
+    _write_gold_root(comparison, code="code-c", body="Comparison numbered sentence.")
     (second / "corpus" / "second.md").write_text(
         (second / "corpus" / "document.md").read_text(encoding="utf-8"),
         encoding="utf-8",
@@ -77,7 +79,7 @@ def test_optimize_accepts_multiple_uniform_gold_roots(tmp_path: Path) -> None:
     guidance = prompts / "config" / "deep-analysis-filter"
     guidance.mkdir(parents=True)
     (guidance / "coding-guidance.md").write_text(
-        "Judge each definition and select a minimal complete sentence span.\n",
+        "Baseline coding guidance.\n",
         encoding="utf-8",
     )
     (guidance / "index.md").write_text(
@@ -119,9 +121,9 @@ ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()
         tmp_path / "fake-claude",
         f"""
 import json, os, sys
+prompt = sys.stdin.read()
 with open({str(events)!r}, 'a') as stream:
-    stream.write(json.dumps({{'kind': 'claude', 'pid': os.getpid()}}) + '\\n')
-sys.stdin.read()
+    stream.write(json.dumps({{'kind': 'claude', 'pid': os.getpid(), 'prompt': prompt}}) + '\\n')
 print('```\\nEvaluate all definitions independently. Select the narrowest complete sentence range that carries enough evidence, enforce every inclusion and exclusion, and emit nothing when evidence is insufficient. Keep distinct passages separate and explain the decisive language briefly.\\n```')
 """,
     )
@@ -137,7 +139,7 @@ candidate = pathlib.Path(value('--prompt-root'), 'deep-analysis-filter', 'coding
 documents = []
 for source in job['documents']:
     annotations = []
-    if 'Evaluate all definitions independently' not in candidate:
+    if 'Evaluate all definitions independently' in candidate:
         callout = json.loads(job['dimensions'][0]['markdown'].split('\\n', 1)[1].rsplit('\\n```', 1)[0])
         annotations = [{{'text': source['markdown'].strip(), 'reason': 'fake', 'code': callout['id'], 'actor': 'fake'}}]
     documents.append({{
@@ -162,9 +164,13 @@ with open({str(events)!r}, 'a') as stream:
     completed = subprocess.run(
         [
             "nabu-evals",
-            "optimize",
+            "campaign",
+            "--development-root",
             str(first),
+            "--development-root",
             str(second),
+            "--comparison-root",
+            str(comparison),
             "--frontend",
             str(frontend),
             "--prompts",
@@ -195,26 +201,45 @@ with open({str(events)!r}, 'a') as stream:
 
     assert completed.returncode == 0, completed.stderr
     run = json.loads((output / "run.json").read_text(encoding="utf-8"))
-    assert [root["name"] for root in run["roots"]] == ["first", "second"]
+    assert [root["name"] for root in run["development_roots"]] == ["first", "second"]
+    assert [root["name"] for root in run["comparison_roots"]] == ["comparison"]
     assert run["status"] == "complete"
     recorded = [
         json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()
     ]
     dragoman_events = [event for event in recorded if event["kind"] == "fake-dragoman"]
     chancery_events = [event for event in recorded if event["kind"] == "fake-chancery"]
+    claude_events = [event for event in recorded if event["kind"] == "claude"]
     npm_events = [event for event in recorded if event["kind"] == "npm"]
-    assert len(dragoman_events) == 1
-    runtime_config = (output / "runtime/dragoman.yaml").read_text(encoding="utf-8")
+    assert len(dragoman_events) == 2
+    runtime_config = (output / "development/runtime/dragoman.yaml").read_text(
+        encoding="utf-8"
+    )
     assert f"http://127.0.0.1:{bridge.server_port}/v1" in runtime_config
-    assert len(chancery_events) == 2
-    assert len({event["pid"] for event in chancery_events}) == 2
-    assert len({event["port"] for event in chancery_events}) == 2
-    assert len(npm_events) == 4
+    assert len(chancery_events) == 4
+    assert len({event["pid"] for event in chancery_events}) == 4
+    assert len({event["port"] for event in chancery_events}) == 4
+    assert claude_events
+    assert all(
+        "Comparison numbered sentence." not in event["prompt"]
+        for event in claude_events
+    )
+    assert len(npm_events) == 6
     assert {event["documents"] for event in npm_events} == {1, 2}
-    assert (output / "candidates/baseline/coding-guidance.md").is_file()
-    assert (output / "candidates/proposal-1/coding-guidance.md").is_file()
-    assert (output / "scores.json").is_file()
-    scores = json.loads((output / "scores.json").read_text(encoding="utf-8"))
-    assert [candidate["score"] for candidate in scores["candidates"]] == [1, 0]
-    assert scores["best_index"] == 0
+    assert (output / "development/candidates/baseline/coding-guidance.md").is_file()
+    assert (output / "development/candidates/proposal-1/coding-guidance.md").is_file()
+    assert (output / "development/scores.json").is_file()
+    scores = json.loads(
+        (output / "development/scores.json").read_text(encoding="utf-8")
+    )
+    assert [candidate["score"] for candidate in scores["candidates"]] == [0, 1]
+    assert scores["best_index"] == 1
     assert scores["proposal_indices"] == [1]
+    comparison_result = json.loads(
+        (output / "comparison.json").read_text(encoding="utf-8")
+    )
+    assert comparison_result["winner_index"] == 1
+    assert comparison_result["accepted"] is True
+    assert [score["root"] for score in comparison_result["roots"]] == ["comparison"]
+    selected = (output / "selected-coding-guidance.md").read_text(encoding="utf-8")
+    assert selected.startswith("Evaluate all definitions independently")
