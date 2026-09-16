@@ -88,12 +88,12 @@ def test_campaign_scores_development_winner_on_protected_roots(tmp_path: Path) -
         "---\nmodel: voter-one\n---\nFixed contract.\n\n[coding-guidance.md]\n",
         encoding="utf-8",
     )
-    (prompts / "config" / "models.claude-cli.yaml").write_text(
+    (prompts / "config" / "models.codex.yaml").write_text(
         "models:\n  voter-one:\n    model: fake/model\n", encoding="utf-8"
     )
     (prompts / "dragoman.yaml").write_text(
-        "mode: override\nclaude-cli:\n  endpoint: http://host.docker.internal:8082/v1\n"
-        "  protocol: anthropic-messages\n  auth: CLAUDE_BRIDGE_KEY\n",
+        "mode: override\ncodex:\n  endpoint: http://host.docker.internal:8083/v1\n"
+        "  protocol: openai-responses\n  auth: CODEX_BRIDGE_KEY\n",
         encoding="utf-8",
     )
     events = tmp_path / "events.jsonl"
@@ -110,7 +110,7 @@ port = int(os.environ.get('PORT', '0'))
 if '--addr' in sys.argv:
     port = int(sys.argv[sys.argv.index('--addr') + 1].rsplit(':', 1)[1])
 with open(events, 'a') as stream:
-    stream.write(json.dumps({{'kind': kind, 'pid': os.getpid(), 'port': port}}) + '\\n')
+    stream.write(json.dumps({{'kind': kind, 'pid': os.getpid(), 'port': port, 'args': sys.argv[1:]}}) + '\\n')
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
@@ -220,8 +220,9 @@ with open({str(events)!r}, 'a') as stream:
     assert len(chancery_events) == 4
     assert len({event["pid"] for event in chancery_events}) == 4
     assert len({event["port"] for event in chancery_events}) == 4
+    assert all("models.codex.yaml" in event["args"] for event in chancery_events)
     assert len(reflection_events) == 1
-    assert reflection_events[0]["request"]["model"] == "claude-cli/claude-opus-5"
+    assert reflection_events[0]["request"]["model"] == "codex/gpt-5.6-sol"
     assert (
         "Comparison numbered sentence." not in reflection_events[0]["request"]["input"]
     )

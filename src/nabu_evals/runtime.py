@@ -62,15 +62,13 @@ def preflight_bridge(url: str) -> None:
         with urllib.request.urlopen(health, timeout=3) as response:
             payload = json.loads(response.read())
     except (OSError, ValueError, urllib.error.URLError) as error:
-        raise RuntimeFailure(
-            f"Claude bridge preflight failed at {health}: {error}"
-        ) from error
+        raise RuntimeFailure(f"bridge preflight failed at {health}: {error}") from error
     if (
         response.status != 200
         or payload.get("ok") is not True
         or not payload.get("account")
     ):
-        raise RuntimeFailure(f"{health} is not a signed-in Claude bridge")
+        raise RuntimeFailure(f"{health} is not a signed-in bridge")
 
 
 class ManagedProcess(AbstractContextManager["ManagedProcess"]):
@@ -243,7 +241,7 @@ class DragomanRuntime(AbstractContextManager["DragomanRuntime"]):
         source = self.settings.prompts / "dragoman.yaml"
         config_text = source.read_text(encoding="utf-8")
         config_text = config_text.replace(
-            "http://host.docker.internal:8082", self.settings.bridge_url.rstrip("/")
+            "http://host.docker.internal:8083", self.settings.bridge_url.rstrip("/")
         )
         runtime_dir = self.settings.output / "runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)

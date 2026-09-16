@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from nabu_evals.optimizer import DEFAULT_BRIDGE_URL, DEFAULT_MODEL_TABLE
 from nabu_evals.runtime import DragomanRuntime, RuntimeSettings
 
 
@@ -15,9 +16,9 @@ def main() -> None:
     parser.add_argument("--prompts", type=Path, required=True)
     parser.add_argument("--chancery-bin", required=True)
     parser.add_argument("--dragoman-bin", required=True)
-    parser.add_argument("--bridge-url", required=True)
+    parser.add_argument("--bridge-url", default=DEFAULT_BRIDGE_URL)
     parser.add_argument("--chancery-port", type=int, required=True)
-    parser.add_argument("--model-table", required=True)
+    parser.add_argument("--model-table", default=DEFAULT_MODEL_TABLE)
     args = parser.parse_args()
     prompts = args.prompts.expanduser().resolve()
     output = Path(".context/dev-runtime").resolve()

@@ -1,14 +1,14 @@
 PROMPTS ?= ../nabu-prompts
 CHANCERY ?= chancery
 DRAGOMAN ?= dragoman
-BRIDGE_URL ?= http://127.0.0.1:8082
+BRIDGE_URL ?=
 CHANCERY_PORT ?= 8081
-MODEL_TABLE ?= models.claude-cli.yaml
+MODEL_TABLE ?=
 
 .PHONY: dev check test optimize campaign
 
 dev:
-	uv run python -m nabu_evals.dev --prompts "$(PROMPTS)" --chancery-bin "$(CHANCERY)" --dragoman-bin "$(DRAGOMAN)" --bridge-url "$(BRIDGE_URL)" --chancery-port "$(CHANCERY_PORT)" --model-table "$(MODEL_TABLE)"
+	uv run python -m nabu_evals.dev --prompts "$(PROMPTS)" --chancery-bin "$(CHANCERY)" --dragoman-bin "$(DRAGOMAN)" --chancery-port "$(CHANCERY_PORT)" $(if $(BRIDGE_URL),--bridge-url "$(BRIDGE_URL)") $(if $(MODEL_TABLE),--model-table "$(MODEL_TABLE)")
 
 check:
 	uv run ruff check .

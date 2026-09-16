@@ -12,7 +12,13 @@ from nabu_evals.campaign import guidance_for_hash, run_campaign
 from nabu_evals.generate import generate_semeval_propaganda, split_legacy_codebook
 from nabu_evals.generators.epitome import generate_epitome
 from nabu_evals.gold import GoldValidationError, load_gold_root
-from nabu_evals.optimizer import OptimizerSettings, run_optimizer
+from nabu_evals.optimizer import (
+    DEFAULT_BRIDGE_URL,
+    DEFAULT_MODEL_TABLE,
+    DEFAULT_REFLECTION_MODEL,
+    OptimizerSettings,
+    run_optimizer,
+)
 from nabu_evals.runtime import RuntimeFailure
 
 
@@ -23,10 +29,10 @@ def _add_runtime_options(command: argparse.ArgumentParser) -> None:
     command.add_argument("--max-candidate-proposals", type=int, default=1)
     command.add_argument("--chancery-bin", default="chancery")
     command.add_argument("--dragoman-bin", default="dragoman")
-    command.add_argument("--reflection-model", default="claude-cli/claude-opus-5")
+    command.add_argument("--reflection-model", default=DEFAULT_REFLECTION_MODEL)
     command.add_argument("--npm-bin", default="npm")
-    command.add_argument("--model-table", default="models.claude-cli.yaml")
-    command.add_argument("--bridge-url", default="http://127.0.0.1:8082")
+    command.add_argument("--model-table", default=DEFAULT_MODEL_TABLE)
+    command.add_argument("--bridge-url", default=DEFAULT_BRIDGE_URL)
     command.add_argument("--per-root-timeout", type=int, default=1_800)
     command.add_argument("--total-timeout", type=int, default=7_200)
     command.add_argument("--max-frontend-invocations", type=int, default=100)

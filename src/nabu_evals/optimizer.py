@@ -24,6 +24,10 @@ from nabu_evals.gold import GoldRoot
 from nabu_evals.runtime import DragomanRuntime, RuntimeSettings
 from nabu_evals.target import QualCodingTarget, candidate_hash
 
+DEFAULT_REFLECTION_MODEL = "codex/gpt-5.6-sol"
+DEFAULT_MODEL_TABLE = "models.codex.yaml"
+DEFAULT_BRIDGE_URL = "http://127.0.0.1:8083"
+
 REFLECTION_TEMPLATE = """You are improving one reusable qualitative-coding guidance component.
 
 Current component:
@@ -52,10 +56,10 @@ class OptimizerSettings:
     output: Path
     chancery_bin: str
     dragoman_bin: str
-    reflection_model: str = "claude-cli/claude-opus-5"
+    reflection_model: str = DEFAULT_REFLECTION_MODEL
     npm_bin: str = "npm"
-    model_table: str = "models.claude-cli.yaml"
-    bridge_url: str = "http://127.0.0.1:8082"
+    model_table: str = DEFAULT_MODEL_TABLE
+    bridge_url: str = DEFAULT_BRIDGE_URL
     max_candidate_proposals: int = 1
     per_root_timeout: int = 1_800
     total_timeout: int = 7_200

@@ -7,7 +7,7 @@ Automatic, deterministic prompt evaluation and proposal generation for Nabu qual
 - Python 3.14 and `uv`
 - The linked `nabu-frontend` and `nabu-prompts` checkouts
 - Native `chancery` and `dragoman` binaries
-- A signed-in Dragoman Claude bridge on port 8082
+- A signed-in Dragoman Codex bridge on port 8083
 
 Install the locked Python environment with `uv sync`.
 
@@ -46,7 +46,7 @@ During an optimization run, nabu-evals validates a gold root, builds a normal co
 
 The `optimize` output is labelled as an optimization-set proposal. It includes both candidates even when the baseline remains best; no holdout or generalization claim is made. Use `campaign` to add the protected comparison check.
 
-Reflection is a normal request to the local Dragoman gateway. `--reflection-model` defaults to `claude-cli/claude-opus-5`, which routes through the Claude bridge. Start the Codex bridge on port 8083 and use `--reflection-model codex/gpt-5.4` to use Codex instead; the coding model stays unchanged.
+Both evaluation roles use the local Codex bridge: `voter-one` codes with `codex/gpt-5.6-terra` at medium reasoning, while reflection uses `codex/gpt-5.6-sol` at high reasoning. The defaults select `models.codex.yaml` and `codex/gpt-5.6-sol`.
 
 ## 💻 Commands
 
