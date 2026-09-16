@@ -92,7 +92,7 @@ def test_campaign_scores_development_winner_on_protected_roots(tmp_path: Path) -
         "models:\n  voter-one:\n    model: fake/model\n", encoding="utf-8"
     )
     (prompts / "dragoman.yaml").write_text(
-        "mode: override\ncodex:\n  endpoint: http://host.docker.internal:8083/v1\n"
+        "mode: override\ncodex:\n  endpoint: http://host.docker.internal:8084/v1\n"
         "  protocol: openai-responses\n  auth: CODEX_BRIDGE_KEY\n",
         encoding="utf-8",
     )

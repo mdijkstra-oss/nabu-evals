@@ -241,7 +241,7 @@ class DragomanRuntime(AbstractContextManager["DragomanRuntime"]):
         source = self.settings.prompts / "dragoman.yaml"
         config_text = source.read_text(encoding="utf-8")
         config_text = config_text.replace(
-            "http://host.docker.internal:8083", self.settings.bridge_url.rstrip("/")
+            "http://host.docker.internal:8084", self.settings.bridge_url.rstrip("/")
         )
         runtime_dir = self.settings.output / "runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)

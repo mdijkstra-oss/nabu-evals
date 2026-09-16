@@ -7,7 +7,7 @@ Automatic, deterministic prompt evaluation and proposal generation for Nabu qual
 - Python 3.14 and `uv`
 - The linked `nabu-frontend` and `nabu-prompts` checkouts
 - Native `chancery` and `dragoman` binaries
-- A signed-in Dragoman Codex bridge on port 8083
+- A signed-in Codex bridge on port 8084; start it with `make codex-bridge`
 
 Install the locked Python environment with `uv sync`.
 
@@ -16,13 +16,13 @@ Install the locked Python environment with `uv sync`.
 Run one closed optimization loop against one or more already-prepared gold roots:
 
 ```sh
-make optimize ARGS="/path/to/gold-small --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery --dragoman-bin /path/to/dragoman"
+make optimize ARGS="/path/to/gold-small --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery"
 ```
 
 Run a campaign when development and protected comparison roots are available:
 
 ```sh
-make campaign ARGS="--development-root /path/to/development-a --development-root /path/to/development-b --comparison-root /path/to/comparison-a --comparison-root /path/to/comparison-b --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery --dragoman-bin /path/to/dragoman"
+make campaign ARGS="--development-root /path/to/development-a --development-root /path/to/development-b --comparison-root /path/to/comparison-a --comparison-root /path/to/comparison-b --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery"
 ```
 
 The campaign runs the existing optimizer only on development roots, then scores its best candidate and the baseline on comparison roots. It accepts the candidate only when mean comparison F1 rises and no comparison root regresses. `comparison.json` records the decision and per-root deltas. `selected-coding-guidance.md` holds the accepted candidate or the retained baseline; the source prompt remains unchanged.
@@ -64,6 +64,7 @@ make check     # Ruff and Pyright
 make test      # pytest
 make optimize ARGS="..."
 make campaign ARGS="..."
+make codex-bridge  # signed-in Codex endpoint on 127.0.0.1:8084
 make report ARGS="/path/to/campaign-output"
 uv run nabu-evals generate <source> ...
 ```

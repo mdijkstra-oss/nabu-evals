@@ -26,7 +26,7 @@ from nabu_evals.target import QualCodingTarget, candidate_hash
 
 DEFAULT_REFLECTION_MODEL = "codex/gpt-5.6-sol"
 DEFAULT_MODEL_TABLE = "models.codex.yaml"
-DEFAULT_BRIDGE_URL = "http://127.0.0.1:8083"
+DEFAULT_BRIDGE_URL = "http://127.0.0.1:8084"
 
 REFLECTION_TEMPLATE = """You are improving one reusable qualitative-coding guidance component.
 
