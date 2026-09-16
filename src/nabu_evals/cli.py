@@ -23,8 +23,7 @@ def _add_runtime_options(command: argparse.ArgumentParser) -> None:
     command.add_argument("--max-candidate-proposals", type=int, default=1)
     command.add_argument("--chancery-bin", default="chancery")
     command.add_argument("--dragoman-bin", default="dragoman")
-    command.add_argument("--claude-bin", default="claude")
-    command.add_argument("--reflection-model", default="opus")
+    command.add_argument("--reflection-model", default="claude-cli/claude-opus-5")
     command.add_argument("--npm-bin", default="npm")
     command.add_argument("--model-table", default="models.claude-cli.yaml")
     command.add_argument("--bridge-url", default="http://127.0.0.1:8082")
@@ -88,7 +87,6 @@ def _settings(args: argparse.Namespace, output: Path) -> OptimizerSettings:
         output=output,
         chancery_bin=args.chancery_bin,
         dragoman_bin=args.dragoman_bin,
-        claude_bin=args.claude_bin,
         reflection_model=args.reflection_model,
         npm_bin=args.npm_bin,
         model_table=args.model_table,

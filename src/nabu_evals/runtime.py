@@ -251,6 +251,7 @@ class DragomanRuntime(AbstractContextManager["DragomanRuntime"]):
         config.write_text(config_text, encoding="utf-8")
         env = os.environ.copy()
         env.setdefault("CLAUDE_BRIDGE_KEY", "local-evaluation")
+        env.setdefault("CODEX_BRIDGE_KEY", "local-evaluation")
         self.process = ManagedProcess(
             [
                 self.settings.dragoman_bin,

@@ -5,6 +5,8 @@ import json
 import re
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from difflib import unified_diff
@@ -50,8 +52,7 @@ class OptimizerSettings:
     output: Path
     chancery_bin: str
     dragoman_bin: str
-    claude_bin: str
-    reflection_model: str = "opus"
+    reflection_model: str = "claude-cli/claude-opus-5"
     npm_bin: str = "npm"
     model_table: str = "models.claude-cli.yaml"
     bridge_url: str = "http://127.0.0.1:8082"
@@ -124,16 +125,16 @@ def _revision(root: Path) -> str:
         return "unknown"
 
 
-class ClaudeOpusReflection:
+class DragomanReflection:
     def __init__(
         self,
         *,
-        binary: str,
+        gateway: str,
         model: str,
         output: Path,
         validate: Any,
     ) -> None:
-        self.binary = binary
+        self.gateway = gateway.rstrip("/")
         self.model = model
         self.output = output
         self.validate = validate
@@ -157,33 +158,41 @@ class ClaudeOpusReflection:
         call_dir = self.output / "reflection" / f"call-{self.calls}-{suffix}"
         call_dir.mkdir(parents=True, exist_ok=True)
         (call_dir / "prompt.md").write_text(prompt, encoding="utf-8")
-        completed = subprocess.run(
-            [
-                self.binary,
-                "--print",
-                "--model",
-                self.model,
-                "--effort",
-                "high",
-                "--no-session-persistence",
-                "--permission-mode",
-                "dontAsk",
-                "--permission-prompts",
-                "none",
-                "--tools",
-                "",
-            ],
-            input=prompt,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=900,
+        request = urllib.request.Request(
+            f"{self.gateway}/responses",
+            data=json.dumps(
+                {
+                    "model": self.model,
+                    "input": prompt,
+                    "reasoning": {"effort": "high"},
+                    "store": False,
+                }
+            ).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
-        (call_dir / "response.md").write_text(completed.stdout, encoding="utf-8")
-        (call_dir / "stderr.log").write_text(completed.stderr, encoding="utf-8")
-        if completed.returncode != 0:
-            raise RuntimeError(f"Claude CLI exited with status {completed.returncode}")
-        return completed.stdout
+        try:
+            with urllib.request.urlopen(request, timeout=900) as response:
+                payload = json.loads(response.read())
+        except (OSError, ValueError, urllib.error.HTTPError) as error:
+            raise RuntimeError(
+                f"Dragoman reflection request failed: {error}"
+            ) from error
+        (call_dir / "response.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        text = "".join(
+            content["text"]
+            for item in payload.get("output", [])
+            if isinstance(item, dict)
+            for content in item.get("content", [])
+            if isinstance(content, dict)
+            and content.get("type") == "output_text"
+            and isinstance(content.get("text"), str)
+        )
+        if not text:
+            raise RuntimeError("Dragoman reflection response has no output text")
+        return text
 
     def __call__(self, prompt: object) -> str:
         prompt_text = self._prompt_text(prompt)
@@ -240,8 +249,8 @@ def run_optimizer(
             total_deadline=deadline,
             baseline=baseline,
         )
-        reflection = ClaudeOpusReflection(
-            binary=settings.claude_bin,
+        reflection = DragomanReflection(
+            gateway=f"http://127.0.0.1:{dragoman.port}",
             model=settings.reflection_model,
             output=settings.output,
             validate=target.validate_candidate,
@@ -368,7 +377,8 @@ def run_optimizer(
             "prompts_revision": _revision(settings.prompts),
             "chancery": _version(settings.chancery_bin),
             "dragoman": _version(settings.dragoman_bin),
-            "claude": _version(settings.claude_bin),
+            "reflection_transport": "dragoman",
+            "reflection_model": settings.reflection_model,
             "gepa": "0.1.4",
             "settings": asdict(settings),
         },

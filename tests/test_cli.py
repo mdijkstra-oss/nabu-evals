@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -112,21 +114,17 @@ with open(events, 'a') as stream:
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        with open(events, 'a') as stream:
+            stream.write(json.dumps({{'kind': kind + '-reflection', 'request': request}}) + '\\n')
+        response = json.dumps({{'output': [{{'type': 'message', 'content': [{{'type': 'output_text', 'text': '```\\nEvaluate all definitions independently. Select the narrowest complete sentence range that carries enough evidence, enforce every inclusion and exclusion, and emit nothing when evidence is insufficient. Keep distinct passages separate and explain the decisive language briefly.\\n```'}}]}}]}}).encode()
+        self.send_response(200); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(response))); self.end_headers(); self.wfile.write(response)
     def log_message(self, *args): pass
 ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()
 """
     chancery = _executable(tmp_path / "fake-chancery", runtime_source)
     dragoman = _executable(tmp_path / "fake-dragoman", runtime_source)
-    claude = _executable(
-        tmp_path / "fake-claude",
-        f"""
-import json, os, sys
-prompt = sys.stdin.read()
-with open({str(events)!r}, 'a') as stream:
-    stream.write(json.dumps({{'kind': 'claude', 'pid': os.getpid(), 'prompt': prompt}}) + '\\n')
-print('```\\nEvaluate all definitions independently. Select the narrowest complete sentence range that carries enough evidence, enforce every inclusion and exclusion, and emit nothing when evidence is insufficient. Keep distinct passages separate and explain the decisive language briefly.\\n```')
-""",
-    )
     npm = _executable(
         tmp_path / "fake-npm",
         f"""
@@ -157,13 +155,15 @@ with open({str(events)!r}, 'a') as stream:
 """,
     )
     output = tmp_path / "run"
+    executable = shutil.which("nabu-evals")
+    assert executable is not None
     bridge = ThreadingHTTPServer(("127.0.0.1", 0), _Health)
     thread = threading.Thread(target=bridge.serve_forever, daemon=True)
     thread.start()
 
     completed = subprocess.run(
         [
-            "nabu-evals",
+            executable,
             "campaign",
             "--development-root",
             str(first),
@@ -181,8 +181,6 @@ with open({str(events)!r}, 'a') as stream:
             str(chancery),
             "--dragoman-bin",
             str(dragoman),
-            "--claude-bin",
-            str(claude),
             "--npm-bin",
             str(npm),
             "--bridge-url",
@@ -195,6 +193,7 @@ with open({str(events)!r}, 'a') as stream:
         check=False,
         capture_output=True,
         text=True,
+        env={**os.environ, "PATH": "/usr/bin"},
     )
     bridge.shutdown()
     thread.join(timeout=5)
@@ -209,7 +208,9 @@ with open({str(events)!r}, 'a') as stream:
     ]
     dragoman_events = [event for event in recorded if event["kind"] == "fake-dragoman"]
     chancery_events = [event for event in recorded if event["kind"] == "fake-chancery"]
-    claude_events = [event for event in recorded if event["kind"] == "claude"]
+    reflection_events = [
+        event for event in recorded if event["kind"] == "fake-dragoman-reflection"
+    ]
     npm_events = [event for event in recorded if event["kind"] == "npm"]
     assert len(dragoman_events) == 2
     runtime_config = (output / "development/runtime/dragoman.yaml").read_text(
@@ -219,10 +220,10 @@ with open({str(events)!r}, 'a') as stream:
     assert len(chancery_events) == 4
     assert len({event["pid"] for event in chancery_events}) == 4
     assert len({event["port"] for event in chancery_events}) == 4
-    assert claude_events
-    assert all(
-        "Comparison numbered sentence." not in event["prompt"]
-        for event in claude_events
+    assert len(reflection_events) == 1
+    assert reflection_events[0]["request"]["model"] == "claude-cli/claude-opus-5"
+    assert (
+        "Comparison numbered sentence." not in reflection_events[0]["request"]["input"]
     )
     assert len(npm_events) == 6
     assert {event["documents"] for event in npm_events} == {1, 2}
