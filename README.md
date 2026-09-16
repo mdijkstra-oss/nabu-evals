@@ -20,7 +20,20 @@ Run one closed optimization loop against one or more already-prepared gold roots
 make optimize ARGS="/path/to/gold-small --frontend /path/to/nabu-frontend --prompts /path/to/nabu-prompts --output /new/output --chancery-bin /path/to/chancery --dragoman-bin /path/to/dragoman"
 ```
 
-Each gold root must contain `codebook.md` and `corpus/*.md`. Every corpus document must have exactly one `json-annotations` block, and codebook callout IDs must be unique and cover every gold annotation code.
+Each gold root must contain `framework.md`, `codes/*.md`, and `corpus/*.md`. The framework contains shared Markdown without callouts; every code file contains one `json-callout` definition. Every corpus document must have exactly one `json-annotations` block, and code callout IDs must be unique and cover every gold annotation code.
+
+## Generate gold roots
+
+Nabu-evals owns the benchmark format and its source importers. They produce the same normal coding files that the frontend receives during an evaluation:
+
+```sh
+uv run nabu-evals generate migrate-codebook /path/to/legacy-gold-root
+uv run nabu-evals generate semeval-propaganda /path/to/ptc-datasets /new/gold-root
+uv run nabu-evals generate annomi /path/to/annomi /new/gold-root
+uv run nabu-evals generate epitome /path/to/epitome-dataset /new/gold-root
+```
+
+During an optimization run, nabu-evals validates a gold root, builds a normal coding job from its framework, code files, and corpus prose, then asks nabu-frontend only to run that job. Nabu-evals retains the gold annotations and owns scoring, diagnostics, and run artifacts.
 
 The output is labelled as an optimization-set proposal. It includes both candidates even when the baseline remains best; no holdout or generalization claim is made.
 
@@ -33,6 +46,7 @@ make dev       # native Dragoman plus watched Chancery for manual prompt work
 make check     # Ruff and Pyright
 make test      # pytest
 make optimize ARGS="..."
+uv run nabu-evals generate <source> ...
 ```
 
 `make dev` reads `PROMPTS`, `CHANCERY`, `DRAGOMAN`, `BRIDGE_URL`, `CHANCERY_PORT`, and `MODEL_TABLE` overrides. Automatic optimization uses immutable candidate-specific Chancery processes instead of the watched development process.

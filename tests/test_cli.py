@@ -9,8 +9,9 @@ from pathlib import Path
 
 def _write_gold_root(root: Path, *, code: str, body: str) -> None:
     (root / "corpus").mkdir(parents=True)
-    (root / "codebook.md").write_text(
-        "Framework\n\n"
+    (root / "codes").mkdir()
+    (root / "framework.md").write_text("Framework\n", encoding="utf-8")
+    (root / "codes" / f"{code}.md").write_text(
         "```json-callout\n"
         + json.dumps(
             {
@@ -130,32 +131,27 @@ print('```\\nEvaluate all definitions independently. Select the narrowest comple
 import json, os, pathlib, sys
 args = sys.argv
 def value(flag): return args[args.index(flag) + 1]
-output = pathlib.Path(value('--output')); output.mkdir(parents=True)
-gold = pathlib.Path(value('--gold-dir'))
+output = pathlib.Path(value('--output')); output.parent.mkdir(parents=True, exist_ok=True)
+job = json.loads(pathlib.Path(value('--input')).read_text())
 candidate = pathlib.Path(value('--prompt-root'), 'deep-analysis-filter', 'coding-guidance.md').read_text()
-if 'Evaluate all definitions independently' in candidate:
-    score = 0.1
-else:
-    score = 0.2 if gold.name == 'first' else 0.8
 documents = []
-for source in sorted((gold / 'corpus').glob('*.md')):
-    (output / (source.stem + '.generated.md')).write_text(source.read_text())
+for source in job['documents']:
+    annotations = []
+    if 'Evaluate all definitions independently' not in candidate:
+        callout = json.loads(job['dimensions'][0]['markdown'].split('\\n', 1)[1].rsplit('\\n```', 1)[0])
+        annotations = [{{'text': source['markdown'].strip(), 'reason': 'fake', 'code': callout['id'], 'actor': 'fake'}}]
     documents.append({{
-      'name': source.name, 'status': 'success', 'annotationCount': 1,
-      'goldAnnotationCount': 1, 'warnings': [], 'failures': [],
-      'comparison': {{'matches': [], 'falsePositives': [], 'falseNegatives': [], 'errors': []}}
+      'path': source['path'], 'status': 'success' if annotations else 'empty',
+      'annotationCount': len(annotations), 'warnings': [], 'failures': [],
+      'generatedMarkdown': source['markdown'] + '\\n```json-annotations\\n' + json.dumps({{'annotations': annotations}}) + '\\n```\\n'
     }})
 result = {{
-  'documents': documents, 'outcomes': {{'success': len(documents), 'empty': 0, 'partial': 0, 'failed': 0, 'malformed': 0}},
-  'complete': True, 'soft': {{'tp': score, 'fp': 1-score, 'fn': 1-score, 'precision': score, 'recall': score, 'f1': score}},
-  'relaxed': {{'tp': 1, 'fp': 0, 'fn': 0, 'precision': 1, 'recall': 1, 'f1': 1}},
-  'exact': {{'tp': 1, 'fp': 0, 'fn': 0, 'precision': 1, 'recall': 1, 'f1': 1}},
-  'perCode': [], 'diagnostics': [], 'requests': [{{'endpoint': '/deep-analysis-filter.voter-one'}}],
-  'endpoints': ['/deep-analysis-filter.voter-one']
+  'documents': documents, 'latencyMs': 1, 'retries': 0,
+  'requests': [{{'endpoint': '/deep-analysis-filter.voter-one'}}]
 }}
-(output / 'results.json').write_text(json.dumps(result))
+output.write_text(json.dumps(result))
 with open({str(events)!r}, 'a') as stream:
-    stream.write(json.dumps({{'kind': 'npm', 'gateway': value('--gateway'), 'gold': gold.name}}) + '\\n')
+    stream.write(json.dumps({{'kind': 'npm', 'gateway': value('--gateway'), 'documents': len(job['documents'])}}) + '\\n')
 """,
     )
     output = tmp_path / "run"
@@ -214,11 +210,11 @@ with open({str(events)!r}, 'a') as stream:
     assert len({event["pid"] for event in chancery_events}) == 2
     assert len({event["port"] for event in chancery_events}) == 2
     assert len(npm_events) == 4
-    assert {event["gold"] for event in npm_events} == {"first", "second"}
+    assert {event["documents"] for event in npm_events} == {1, 2}
     assert (output / "candidates/baseline/coding-guidance.md").is_file()
     assert (output / "candidates/proposal-1/coding-guidance.md").is_file()
     assert (output / "scores.json").is_file()
     scores = json.loads((output / "scores.json").read_text(encoding="utf-8"))
-    assert [candidate["score"] for candidate in scores["candidates"]] == [0.5, 0.1]
+    assert [candidate["score"] for candidate in scores["candidates"]] == [1, 0]
     assert scores["best_index"] == 0
     assert scores["proposal_indices"] == [1]

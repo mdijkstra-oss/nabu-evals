@@ -67,30 +67,52 @@ def _tree_hash(files: list[Path], root: Path) -> str:
     return digest.hexdigest()
 
 
+def _without_blocks(markdown: str, language: str) -> str:
+    return _FENCE.sub(
+        lambda match: "" if match.group("language") == language else match.group(0),
+        markdown,
+    )
+
+
 def load_gold_root(path: Path) -> GoldRoot:
     root = path.expanduser().resolve()
-    codebook = root / "codebook.md"
+    framework = root / "framework.md"
+    codes = root / "codes"
     corpus = root / "corpus"
-    if not codebook.is_file():
-        raise GoldValidationError(f"{root}: missing codebook.md")
+    if not framework.is_file():
+        raise GoldValidationError(f"{root}: missing framework.md")
+    if not codes.is_dir():
+        raise GoldValidationError(f"{root}: missing codes directory")
     if not corpus.is_dir():
         raise GoldValidationError(f"{root}: missing corpus directory")
 
-    callouts = _blocks(codebook.read_text(encoding="utf-8"), "json-callout", codebook)
+    if _blocks(framework.read_text(encoding="utf-8"), "json-callout", framework):
+        raise GoldValidationError(
+            f"{framework}: framework must not contain json-callout blocks"
+        )
+    code_files = sorted(codes.glob("*.md"))
+    if not code_files:
+        raise GoldValidationError(f"{codes}: no Markdown code files")
     code_ids: list[str] = []
-    for index, callout in enumerate(callouts):
+    for code_file in code_files:
+        callouts = _blocks(
+            code_file.read_text(encoding="utf-8"), "json-callout", code_file
+        )
+        if len(callouts) != 1:
+            raise GoldValidationError(
+                f"{code_file}: expected exactly one schema-valid json-callout block"
+            )
+        callout = callouts[0]
         code = callout.get("id")
         if not isinstance(code, str) or not code:
-            raise GoldValidationError(
-                f"{codebook}: callout {index} has no non-empty id"
-            )
+            raise GoldValidationError(f"{code_file}: callout has no non-empty id")
         code_ids.append(code)
     if not code_ids:
-        raise GoldValidationError(f"{codebook}: no json-callout definitions")
+        raise GoldValidationError(f"{codes}: no json-callout definitions")
     duplicates = sorted({code for code in code_ids if code_ids.count(code) > 1})
     if duplicates:
         raise GoldValidationError(
-            f"{codebook}: duplicate callout IDs: {', '.join(duplicates)}"
+            f"{codes}: duplicate callout IDs: {', '.join(duplicates)}"
         )
 
     documents = sorted(corpus.glob("*.md"))
@@ -138,7 +160,7 @@ def load_gold_root(path: Path) -> GoldRoot:
     return GoldRoot(
         path=root,
         name=root.name,
-        hash=_tree_hash([codebook, *documents], root),
+        hash=_tree_hash([framework, *code_files, *documents], root),
         document_count=len(documents),
         token_estimate=token_estimate,
         labels=len(code_ids),
@@ -151,5 +173,36 @@ def load_gold_root(path: Path) -> GoldRoot:
 
 
 def callouts_of(root: GoldRoot) -> list[dict[str, Any]]:
-    codebook = root.path / "codebook.md"
-    return _blocks(codebook.read_text(encoding="utf-8"), "json-callout", codebook)
+    codes = root.path / "codes"
+    return [
+        _blocks(code_file.read_text(encoding="utf-8"), "json-callout", code_file)[0]
+        for code_file in sorted(codes.glob("*.md"))
+    ]
+
+
+def coding_job_of(root: GoldRoot) -> dict[str, Any]:
+    """Project a validated gold root into ordinary frontend coding inputs."""
+    codes = root.path / "codes"
+    corpus = root.path / "corpus"
+    return {
+        "framework": {
+            "path": "framework.md",
+            "markdown": (root.path / "framework.md").read_text(encoding="utf-8"),
+        },
+        "dimensions": [
+            {
+                "path": str(code_file.relative_to(root.path)),
+                "markdown": code_file.read_text(encoding="utf-8"),
+            }
+            for code_file in sorted(codes.glob("*.md"))
+        ],
+        "documents": [
+            {
+                "path": document.name,
+                "markdown": _without_blocks(
+                    document.read_text(encoding="utf-8"), "json-annotations"
+                ),
+            }
+            for document in sorted(corpus.glob("*.md"))
+        ],
+    }

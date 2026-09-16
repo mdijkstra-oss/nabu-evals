@@ -42,7 +42,7 @@ flowchart TD
 
 ## Figure 2: Where the loop's artifacts live
 
-[Figure 1](#figure-1-the-optimization-loop) establishes the roles; this map establishes their ownership. The benchmark’s files are regular coding inputs for the frontend, while nabu-evals supplies orchestration and records results. Prompt source material and candidate copies are served through the normal prompt/runtime path, so each score reflects the production coding pipeline. With those boundaries in mind, [Figure 3](#figure-3-inside-run-every-gold-root) follows one evaluation through that path.
+[Figure 1](#figure-1-the-optimization-loop) establishes the roles; this map establishes their ownership. Nabu-evals owns the benchmark format, its conversion, and scoring. It projects each validated benchmark into normal framework, code-definition, and corpus inputs; the frontend only runs those inputs through deep analysis. Prompt source material and candidate copies use the normal prompt/runtime path, so each score still reflects the production coding pipeline. With those boundaries in mind, [Figure 3](#figure-3-inside-run-every-gold-root) follows one evaluation through that path.
 
 ```mermaid
 flowchart LR
@@ -59,6 +59,9 @@ flowchart LR
   subgraph evals["nabu-evals"]
     optimizer["Optimizer"]
     candidate["Candidate prompt copies"]
+    loader["Gold-root loader\nand source generators"]
+    job["Normal coding job"]
+    scorer["Gold scorer\nand metrics"]
     artifacts["Run artifacts\nmanifests, scores, diagnostics, diffs"]
   end
 
@@ -68,9 +71,8 @@ flowchart LR
   end
 
   subgraph frontend["nabu-frontend"]
-    batch["Batch evaluator"]
+    batch["Coding corpus runner"]
     pipeline["Deep-analysis coding pipeline\nframework and dimension sources"]
-    comparison["Annotation comparison\nand metrics"]
   end
 
   subgraph runtime["External runtime services"]
@@ -79,16 +81,18 @@ flowchart LR
     bridge["Claude bridge and model"]
   end
 
-  root -->|validate and record| optimizer
-  root -->|load normal source files| batch
+  root -->|load and validate| loader
+  loader -->|project normal source files| job
+  job -->|run coding corpus| batch
   source -->|copy| candidate
   guidance -->|replace| candidate
   optimizer -->|create| candidate
   candidate -->|serve| chancery
   optimizer -->|run| batch
   batch -->|invoke| pipeline
-  pipeline -->|generated annotations| comparison
-  comparison -->|metrics and diagnostics| artifacts
+  pipeline -->|generated annotations| scorer
+  root -->|gold annotations| scorer
+  scorer -->|metrics and diagnostics| artifacts
   pipeline -->|coding request| chancery
   chancery -->|provider request| dragoman
   dragoman -->|model request| bridge
@@ -99,42 +103,44 @@ flowchart LR
   classDef runtimeNode fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
   classDef artifactNode fill:#fef3c7,stroke:#d97706,color:#78350f
   class root,framework,codes,corpus goldNode
-  class optimizer,candidate evalNode
+  class optimizer,candidate,loader,job,scorer evalNode
   class batch,pipeline frontendNode
   class chancery,dragoman,bridge runtimeNode
-  class artifacts,comparison artifactNode
+  class artifacts artifactNode
 
   linkStyle 0,1,2 stroke:#94a3b8,stroke-width:1px
   linkStyle 3,4 stroke:#0284c7,stroke-width:2px
-  linkStyle 5,6,7,8,9 stroke:#7e22ce,stroke-width:2px
-  linkStyle 10,11 stroke:#16a34a,stroke-width:2px
-  linkStyle 12 stroke:#d97706,stroke-width:2px
-  linkStyle 13,14,15 stroke:#dc2626,stroke-width:2px
+  linkStyle 5,10,11 stroke:#16a34a,stroke-width:2px
+  linkStyle 6,7,8,9 stroke:#7e22ce,stroke-width:2px
+  linkStyle 12,13 stroke:#0284c7,stroke-width:2px
+  linkStyle 14 stroke:#d97706,stroke-width:2px
+  linkStyle 15,16,17 stroke:#dc2626,stroke-width:2px
 ```
 
 ## Figure 3: Inside “run every gold root”
 
-[Figure 2](#figure-2-where-the-loops-artifacts-live) locates the participants; this sequence zooms into one candidate evaluation. The frontend loads the benchmark’s framework and code files as ordinary source files, prepares its corpus, and sends the coding request through the normal model gateway. The scorer compares the returned annotations with gold annotations and returns the metrics and diagnostic evidence that drive the next proposal in the optimization loop.
+[Figure 2](#figure-2-where-the-loops-artifacts-live) locates the participants; this sequence zooms into one candidate evaluation. Nabu-evals loads the benchmark and produces a normal coding job. The frontend receives only that job, runs its normal deep-analysis path, and returns generated annotations. Nabu-evals compares those annotations with the retained gold annotations, producing the metrics and diagnostic evidence that drive the next proposal.
 
 ```mermaid
 sequenceDiagram
   participant E as nabu-evals optimizer
-  participant F as frontend batch evaluator
+  participant F as frontend coding corpus runner
   participant C as Chancery
   participant D as Dragoman
   participant M as Model
-  participant S as Gold scorer
+  participant S as nabu-evals gold scorer
   participant O as Opus reflection
 
   loop Baseline and candidate evaluations
     rect rgb(243, 232, 255)
       Note over E,F: Candidate setup
       E->>C: Serve candidate prompt configuration
-      E->>F: Run batch with gold root and gateway
+      E->>E: Load gold root and create normal coding job
+      E->>F: Run coding corpus with normal job and gateway
     end
     rect rgb(220, 252, 231)
       Note over F,M: Production coding execution
-      F->>F: Load framework.md and codes/*.md as source files
+      F->>F: Load framework and code source files from job
       F->>F: Prepare corpus documents for inference
       F->>C: Request deep-analysis-filter voter-one
       C->>D: Translate model request
@@ -146,7 +152,8 @@ sequenceDiagram
     end
     rect rgb(224, 242, 254)
       Note over E,O: Score and improve guidance
-      F->>S: Generated annotations and gold annotations
+      F->>S: Generated annotations
+      E->>S: Retained gold annotations
       S-->>E: F1 metrics and diagnostics
       E->>O: Current guidance and bounded feedback
       O-->>E: Replacement coding guidance

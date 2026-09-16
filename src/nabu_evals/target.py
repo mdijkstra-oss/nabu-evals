@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from nabu_evals.gold import GoldRoot, callouts_of
+from nabu_evals.gold import GoldRoot, callouts_of, coding_job_of
 from nabu_evals.runtime import CandidateRuntime, RuntimeFailure, RuntimeSettings
+from nabu_evals.scoring import score_coding_run
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,11 @@ class QualCodingTarget:
             forbidden.extend(
                 (name.lower(), "corpus filename") for name in root.documents
             )
-            sources = [root.path / "codebook.md", *(root.path / "corpus").glob("*.md")]
+            sources = [
+                root.path / "framework.md",
+                *(root.path / "codes").glob("*.md"),
+                *(root.path / "corpus").glob("*.md"),
+            ]
             for source in sources:
                 words = source.read_text(encoding="utf-8").lower().split()
                 for start in range(max(0, len(words) - 11)):
@@ -86,8 +91,9 @@ class QualCodingTarget:
                     forbidden.append(
                         (
                             phrase,
-                            "codebook/corpus passage"
-                            if source.name == "codebook.md"
+                            "coding-source/corpus passage"
+                            if source.parent.name == "codes"
+                            or source.name == "framework.md"
                             else "gold passage",
                         )
                     )
@@ -151,15 +157,22 @@ class QualCodingTarget:
             self._check_limits()
             self.frontend_invocations += 1
             attempt_dir = root_dir / f"attempt-{attempt}"
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            job_path = attempt_dir / "coding-job.json"
+            job_path.write_text(
+                json.dumps(coding_job_of(root), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            raw_result_path = attempt_dir / "coding-result.json"
             command = [
                 self.npm_bin,
                 "run",
-                "eval:coding:batch",
+                "coding:corpus",
                 "--",
-                "--gold-dir",
-                str(root.path),
+                "--input",
+                str(job_path),
                 "--output",
-                str(attempt_dir),
+                str(raw_result_path),
                 "--gateway",
                 runtime.gateway,
                 "--passthrough",
@@ -187,7 +200,6 @@ class QualCodingTarget:
                     f"frontend timed out after {self.per_root_timeout}s: {error}"
                 )
                 continue
-            root_dir.mkdir(parents=True, exist_ok=True)
             (root_dir / f"attempt-{attempt}.process.log").write_text(
                 completed.stdout + completed.stderr, encoding="utf-8"
             )
@@ -195,12 +207,15 @@ class QualCodingTarget:
                 last_error = f"frontend exited {completed.returncode}"
                 continue
             try:
-                results = json.loads(
-                    (attempt_dir / "results.json").read_text(encoding="utf-8")
-                )
+                raw_results = json.loads(raw_result_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as error:
-                last_error = f"missing or malformed frontend results: {error}"
+                last_error = f"missing or malformed frontend coding result: {error}"
                 continue
+            results = score_coding_run(root, raw_results)
+            (attempt_dir / "results.json").write_text(
+                json.dumps(results, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
             returned = [
                 document.get("name") for document in results.get("documents", [])
             ]

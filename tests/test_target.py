@@ -12,7 +12,11 @@ from nabu_evals.target import QualCodingTarget
 def _target(tmp_path: Path) -> QualCodingTarget:
     root_path = tmp_path / "gold"
     (root_path / "corpus").mkdir(parents=True)
-    (root_path / "codebook.md").write_text(
+    (root_path / "codes").mkdir()
+    (root_path / "framework.md").write_text(
+        "Shared coding guidance.\n", encoding="utf-8"
+    )
+    (root_path / "codes" / "secret-callout.md").write_text(
         "```json-callout\n"
         + json.dumps(
             {
@@ -79,7 +83,7 @@ def test_rejects_proposal_leakage_and_seed_repetition(tmp_path: Path) -> None:
         target.validate_candidate("Use secret-document.md as a reference.")
     )
     leaked = "This definition has twelve distinct words that must never be copied into proposed reusable guidance verbatim."
-    assert "codebook/corpus passage" in " ".join(target.validate_candidate(leaked))
+    assert "coding-source/corpus passage" in " ".join(target.validate_candidate(leaked))
 
 
 def test_accepts_generic_guidance(tmp_path: Path) -> None:
