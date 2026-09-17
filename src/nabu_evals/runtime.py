@@ -18,6 +18,26 @@ class RuntimeFailure(RuntimeError):
     """A candidate could not be evaluated because its runtime failed."""
 
 
+_EVALUATION_CLI_BRIDGES = {
+    "models.evaluation-cli-gpt.yaml": ("codex",),
+    "models.evaluation-cli-gpt-terra-coder-low.yaml": ("codex",),
+    "models.evaluation-cli-gpt-terra-coder-high.yaml": ("codex",),
+    "models.evaluation-cli-gpt-sol-coder-medium.yaml": ("codex",),
+    "models.evaluation-cli-gpt-sol-adjudicator-high.yaml": ("codex",),
+    "models.evaluation-cli-claude.yaml": ("claude",),
+    "models.evaluation-cli-mixed.yaml": ("claude", "codex"),
+}
+
+
+def required_cli_bridges(model_table: str) -> tuple[str, ...]:
+    try:
+        return _EVALUATION_CLI_BRIDGES[model_table]
+    except KeyError as error:
+        raise ValueError(
+            f"{model_table!r} is not an evaluation CLI model table"
+        ) from error
+
+
 def free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -127,6 +147,7 @@ class RuntimeSettings:
     dragoman_bin: str
     model_table: str
     bridge_url: str
+    claude_bridge_url: str = "http://127.0.0.1:8082"
 
 
 class CandidateRuntime(AbstractContextManager["CandidateRuntime"]):
@@ -237,11 +258,19 @@ class DragomanRuntime(AbstractContextManager["DragomanRuntime"]):
         self.process: ManagedProcess | None = None
 
     def __enter__(self) -> Self:
-        preflight_bridge(self.settings.bridge_url)
+        bridges = required_cli_bridges(self.settings.model_table)
+        if "codex" in bridges:
+            preflight_bridge(self.settings.bridge_url)
+        if "claude" in bridges:
+            preflight_bridge(self.settings.claude_bridge_url)
         source = self.settings.prompts / "dragoman.yaml"
         config_text = source.read_text(encoding="utf-8")
         config_text = config_text.replace(
             "http://host.docker.internal:8084", self.settings.bridge_url.rstrip("/")
+        )
+        config_text = config_text.replace(
+            "http://host.docker.internal:8082",
+            self.settings.claude_bridge_url.rstrip("/"),
         )
         runtime_dir = self.settings.output / "runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)

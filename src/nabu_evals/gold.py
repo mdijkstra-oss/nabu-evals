@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,7 @@ class GoldRoot:
     coding_density: float
     code_ids: tuple[str, ...]
     documents: tuple[str, ...]
+    selection: str = "all"
 
     def manifest(self) -> dict[str, Any]:
         value = asdict(self)
@@ -180,6 +181,84 @@ def callouts_of(root: GoldRoot) -> list[dict[str, Any]]:
     ]
 
 
+def _document_annotations(document: Path) -> list[dict[str, Any]]:
+    blocks = _blocks(document.read_text(encoding="utf-8"), "json-annotations", document)
+    if len(blocks) != 1 or not isinstance(blocks[0].get("annotations"), list):
+        raise GoldValidationError(
+            f"{document}: expected one schema-valid json-annotations block"
+        )
+    annotations = blocks[0]["annotations"]
+    if not all(isinstance(annotation, dict) for annotation in annotations):
+        raise GoldValidationError(f"{document}: annotations must be objects")
+    return annotations
+
+
+def coverage_probe(root: GoldRoot, document_limit: int) -> GoldRoot:
+    """Choose a deterministic, label-coverage-first subset of a validated root.
+
+    Selection uses annotation code IDs and counts only. It intentionally never
+    reads prose content or model outputs, and the returned root still gives the
+    coding pipeline each selected document in full.
+    """
+    if document_limit <= 0:
+        raise ValueError("coverage probe document limit must be positive")
+    if document_limit >= len(root.documents):
+        return root
+    corpus = root.path / "corpus"
+    candidates = []
+    for name in root.documents:
+        annotations = _document_annotations(corpus / name)
+        candidates.append(
+            {
+                "name": name,
+                "codes": {annotation.get("code") for annotation in annotations},
+                "annotations": len(annotations),
+            }
+        )
+    selected: list[dict[str, Any]] = []
+    covered: set[str] = set()
+    remaining = candidates.copy()
+    while remaining and len(selected) < document_limit:
+        remaining.sort(
+            key=lambda candidate: (
+                -len(candidate["codes"] - covered),
+                -len(candidate["codes"]),
+                -candidate["annotations"],
+                candidate["name"],
+            )
+        )
+        next_document = remaining.pop(0)
+        selected.append(next_document)
+        covered.update(next_document["codes"])
+    names = tuple(sorted(str(candidate["name"]) for candidate in selected))
+    documents = [corpus / name for name in names]
+    annotation_count = sum(
+        len(_document_annotations(document)) for document in documents
+    )
+    negatives = sum(not _document_annotations(document) for document in documents)
+    token_estimate = sum(
+        len(re.findall(r"\S+", document.read_text(encoding="utf-8")))
+        for document in documents
+    )
+    digest = hashlib.sha256()
+    digest.update(root.hash.encode())
+    digest.update(b"\0")
+    for name in names:
+        digest.update(name.encode())
+        digest.update(b"\0")
+    return replace(
+        root,
+        hash=digest.hexdigest(),
+        document_count=len(names),
+        token_estimate=token_estimate,
+        annotations=annotation_count,
+        negatives=negatives,
+        coding_density=annotation_count / len(names),
+        documents=names,
+        selection=f"coverage-probe-{document_limit}",
+    )
+
+
 def coding_job_of(root: GoldRoot) -> dict[str, Any]:
     """Project a validated gold root into ordinary frontend coding inputs."""
     codes = root.path / "codes"
@@ -203,6 +282,7 @@ def coding_job_of(root: GoldRoot) -> dict[str, Any]:
                     document.read_text(encoding="utf-8"), "json-annotations"
                 ),
             }
-            for document in sorted(corpus.glob("*.md"))
+            for name in root.documents
+            for document in [corpus / name]
         ],
     }

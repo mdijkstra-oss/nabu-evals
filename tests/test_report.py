@@ -4,6 +4,22 @@ import json
 from pathlib import Path
 
 from nabu_evals.cli import main
+from nabu_evals.report import _protected_plot_data
+
+
+def test_report_uses_one_bar_when_no_candidate_advanced() -> None:
+    assert _protected_plot_data(
+        baseline_f1=0.4,
+        winner_f1=0.4,
+        best_index=0,
+        candidate_compared=False,
+        accepted=False,
+    ) == (
+        ["Baseline"],
+        [0.4],
+        ["#64748b"],
+        "Protected baseline measurement (no candidate advanced)",
+    )
 
 
 def test_report_writes_a_png_for_a_completed_campaign(tmp_path: Path) -> None:

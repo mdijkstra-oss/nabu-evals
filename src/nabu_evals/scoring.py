@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -55,21 +56,61 @@ def _sentences(prose: str) -> list[tuple[int, int]]:
     return rows
 
 
-def _range_for_text(
-    prose: str, rows: list[tuple[int, int]], text: str, occurrence: int
-) -> dict[str, int] | None:
-    if not text:
-        return None
-    offsets: list[tuple[int, int]] = []
+def _words(text: str) -> list[tuple[str, int, int]]:
+    """Mirror the frontend's token-based fuzzy annotation lookup for spans."""
+    words: list[tuple[str, int, int]] = []
+    for match in re.finditer(r"\w+", text, re.UNICODE):
+        normalized = "".join(
+            character
+            for character in unicodedata.normalize("NFD", match.group()).lower()
+            if character.isalnum()
+        )
+        if normalized:
+            words.append((normalized, match.start(), match.end()))
+    return words
+
+
+def _text_offsets(prose: str, text: str) -> list[tuple[int, int]]:
+    """Find literal text first, then Markdown-normalized word sequences.
+
+    The frontend stores annotation text through its fuzzy-field path, replacing
+    a matched Markdown source slice with its display text. Literal lookup would
+    therefore reject e.g. stored ``-hugs-`` for source ``*-hugs-*``. The
+    fallback retains raw offsets, so sentence-range scoring stays anchored in
+    the original document.
+    """
+    literal: list[tuple[int, int]] = []
     start = 0
     while start <= len(prose) - len(text):
         found = prose.find(text, start)
         if found == -1:
             break
-        offsets.append((found, found + len(text)))
+        literal.append((found, found + len(text)))
         start = found + 1
+    if literal:
+        return literal
+
+    needle = _words(text)
+    source = _words(prose)
+    if not needle or len(source) < len(needle):
+        return []
+    matched: list[tuple[int, int]] = []
+    needle_words = [word for word, _, _ in needle]
+    for index in range(len(source) - len(needle) + 1):
+        window = source[index : index + len(needle)]
+        if [word for word, _, _ in window] != needle_words:
+            continue
+        matched.append((window[0][1], window[-1][2]))
+    return matched
+
+
+def _range_for_text(
+    prose: str, rows: list[tuple[int, int]], text: str, occurrence: int
+) -> dict[str, int] | None:
+    if not text:
+        return None
     ranges: list[dict[str, int]] = []
-    for char_start, char_end in offsets:
+    for char_start, char_end in _text_offsets(prose, text):
         matching = [
             index
             for index, (row_start, row_end) in enumerate(rows)
@@ -356,11 +397,82 @@ def compare_coding_documents(
     }
 
 
-def score_coding_run(root: GoldRoot, raw: dict[str, Any]) -> dict[str, Any]:
-    expected = {
-        document.name: document
-        for document in sorted((root.path / "corpus").glob("*.md"))
+def _comparison_findings(comparison: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = comparison.get(key, [])
+    return [finding for finding in value if isinstance(finding, dict)]
+
+
+def _match_summary(matches: list[dict[str, Any]]) -> dict[str, float | int]:
+    ious = [float(match.get("iou", 0)) for match in matches]
+    return {
+        "matches": len(matches),
+        "exact": sum(iou == 1 for iou in ious),
+        "relaxed": sum(iou >= 0.5 for iou in ious),
+        "weak": sum(0 < iou < 0.5 for iou in ious),
+        "totalIou": sum(ious),
     }
+
+
+def _codes(findings: list[dict[str, Any]]) -> set[str]:
+    return {
+        code
+        for finding in findings
+        if isinstance(code := finding.get("code"), str) and code
+    }
+
+
+def diagnose_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
+    """Separate scoring mechanics without judging the semantic gold labels.
+
+    The primary comparison intentionally matches only annotations with the same
+    code. This diagnostic subsequently tries to align the unmatched, resolved
+    annotations by span irrespective of code. Those alignments identify likely
+    code confusions; annotations left over have no overlapping counterpart.
+    """
+    same_code_matches = _comparison_findings(comparison, "matches")
+    false_positives = _comparison_findings(comparison, "falsePositives")
+    false_negatives = _comparison_findings(comparison, "falseNegatives")
+    errors = _comparison_findings(comparison, "errors")
+    cross_code_matches = _matches(false_positives, false_negatives, 0)
+    if any(
+        match["prediction"].get("code") == match["gold"].get("code")
+        for match in cross_code_matches
+    ):
+        raise RuntimeError("same-code spans remained unmatched before diagnosis")
+    matched_predictions = {id(match["prediction"]) for match in cross_code_matches}
+    matched_gold = {id(match["gold"]) for match in cross_code_matches}
+    matched_predictions_with_codes = [
+        match["prediction"] for match in same_code_matches
+    ] + false_positives
+    matched_gold_with_codes = [
+        match["gold"] for match in same_code_matches
+    ] + false_negatives
+    prediction_errors = [error for error in errors if error.get("side") == "prediction"]
+    gold_errors = [error for error in errors if error.get("side") == "gold"]
+    predicted_codes = _codes(matched_predictions_with_codes + prediction_errors)
+    gold_codes = _codes(matched_gold_with_codes + gold_errors)
+    code_tp = len(predicted_codes & gold_codes)
+    return {
+        "sameCode": _match_summary(same_code_matches),
+        "wrongCodeAtOverlappingSpan": _match_summary(cross_code_matches),
+        "residual": {
+            "predictions": sum(
+                id(finding) not in matched_predictions for finding in false_positives
+            ),
+            "gold": sum(id(finding) not in matched_gold for finding in false_negatives),
+            "predictionResolverErrors": len(prediction_errors),
+            "goldResolverErrors": len(gold_errors),
+        },
+        "codePresence": _totals(
+            code_tp,
+            len(predicted_codes - gold_codes),
+            len(gold_codes - predicted_codes),
+        ),
+    }
+
+
+def score_coding_run(root: GoldRoot, raw: dict[str, Any]) -> dict[str, Any]:
+    expected = {name: root.path / "corpus" / name for name in root.documents}
     returned = {
         item.get("path"): item
         for item in raw.get("documents", [])

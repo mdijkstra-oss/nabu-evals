@@ -8,6 +8,24 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
+from nabu_evals.cli import _runtime_executable
+
+
+def test_runtime_executable_anchors_explicit_paths_at_cli_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    assert _runtime_executable("dragoman") == "dragoman"
+    assert _runtime_executable("./tools/dragoman") == str(
+        tmp_path / "tools" / "dragoman"
+    )
+    assert _runtime_executable("../tools/chancery") == str(
+        tmp_path.parent / "tools" / "chancery"
+    )
+
 
 def _write_gold_root(root: Path, *, code: str, body: str) -> None:
     (root / "corpus").mkdir(parents=True)
@@ -88,7 +106,7 @@ def test_campaign_scores_development_winner_on_protected_roots(tmp_path: Path) -
         "---\nmodel: voter-one\n---\nFixed contract.\n\n[coding-guidance.md]\n",
         encoding="utf-8",
     )
-    (prompts / "config" / "models.codex.yaml").write_text(
+    (prompts / "config" / "models.evaluation-cli-gpt.yaml").write_text(
         "models:\n  voter-one:\n    model: fake/model\n", encoding="utf-8"
     )
     (prompts / "dragoman.yaml").write_text(
@@ -171,6 +189,8 @@ with open({str(events)!r}, 'a') as stream:
             str(second),
             "--comparison-root",
             str(comparison),
+            "--coverage-probe-documents",
+            "1",
             "--frontend",
             str(frontend),
             "--prompts",
@@ -199,10 +219,42 @@ with open({str(events)!r}, 'a') as stream:
     thread.join(timeout=5)
 
     assert completed.returncode == 0, completed.stderr
+    assert (
+        "[evaluation 1/4] baseline: root 1/2 (1 documents) started" in completed.stdout
+    )
+    assert (
+        "[evaluation 2/1] proposal-1: root 1/1 (1 documents) complete"
+        in completed.stdout
+    )
+    assert (
+        "[reflection] generating one generic coding-guidance proposal"
+        in completed.stdout
+    )
+    assert "[reflection] proposal search complete" in completed.stdout
+    assert "Iteration 1:" not in completed.stdout
+    assert "estimated remaining:" in completed.stdout
     run = json.loads((output / "run.json").read_text(encoding="utf-8"))
     assert [root["name"] for root in run["development_roots"]] == ["first", "second"]
     assert [root["name"] for root in run["comparison_roots"]] == ["comparison"]
+    assert [root["document_count"] for root in run["development_roots"]] == [1, 1]
+    assert [root["selection"] for root in run["development_roots"]] == [
+        "all",
+        "coverage-probe-1",
+    ]
+    assert run["comparison_roots"][0]["document_count"] == 1
     assert run["status"] == "complete"
+    development_scores = json.loads(
+        (output / "development" / "scores.json").read_text(encoding="utf-8")
+    )
+    assert all(
+        [entry["root"] for entry in candidate["development_root_scores"]]
+        == ["first", "second"]
+        for candidate in development_scores["candidates"]
+    )
+    assert development_scores["best_index"] in {0, 1}
+    assert "Iteration 1:" in (output / "development" / "gepa.log").read_text(
+        encoding="utf-8"
+    )
     recorded = [
         json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()
     ]
@@ -220,14 +272,16 @@ with open({str(events)!r}, 'a') as stream:
     assert len(chancery_events) == 4
     assert len({event["pid"] for event in chancery_events}) == 4
     assert len({event["port"] for event in chancery_events}) == 4
-    assert all("models.codex.yaml" in event["args"] for event in chancery_events)
+    assert all(
+        "models.evaluation-cli-gpt.yaml" in event["args"] for event in chancery_events
+    )
     assert len(reflection_events) == 1
     assert reflection_events[0]["request"]["model"] == "codex/gpt-5.6-sol"
     assert (
         "Comparison numbered sentence." not in reflection_events[0]["request"]["input"]
     )
     assert len(npm_events) == 6
-    assert {event["documents"] for event in npm_events} == {1, 2}
+    assert {event["documents"] for event in npm_events} == {1}
     assert (output / "development/candidates/baseline/coding-guidance.md").is_file()
     assert (output / "development/candidates/proposal-1/coding-guidance.md").is_file()
     assert (output / "development/scores.json").is_file()
@@ -241,6 +295,7 @@ with open({str(events)!r}, 'a') as stream:
         (output / "comparison.json").read_text(encoding="utf-8")
     )
     assert comparison_result["winner_index"] == 1
+    assert comparison_result["candidate_compared"] is True
     assert comparison_result["accepted"] is True
     assert [score["root"] for score in comparison_result["roots"]] == ["comparison"]
     selected = (output / "selected-coding-guidance.md").read_text(encoding="utf-8")

@@ -20,6 +20,29 @@ def _read_object(path: Path) -> dict[str, Any]:
     return value
 
 
+def _protected_plot_data(
+    *,
+    baseline_f1: float,
+    winner_f1: float,
+    best_index: int,
+    candidate_compared: bool,
+    accepted: bool,
+) -> tuple[list[str], list[float], list[str], str]:
+    if not candidate_compared:
+        return (
+            ["Baseline"],
+            [baseline_f1],
+            ["#64748b"],
+            "Protected baseline measurement (no candidate advanced)",
+        )
+    return (
+        ["Baseline", f"Dev winner\n(proposal {best_index})"],
+        [baseline_f1, winner_f1],
+        ["#64748b", "#16a34a" if accepted else "#dc2626"],
+        f"Protected comparison: {'accepted' if accepted else 'baseline retained'}",
+    )
+
+
 def render_campaign_report(run_directory: Path, output: Path | None = None) -> Path:
     """Render the decision-relevant results of a completed campaign as a PNG."""
     run_directory = run_directory.expanduser().resolve()
@@ -39,6 +62,7 @@ def render_campaign_report(run_directory: Path, output: Path | None = None) -> P
         baseline_f1 = float(comparison["baseline_mean_f1"])
         winner_f1 = float(comparison["winner_mean_f1"])
         accepted = bool(comparison["accepted"])
+        candidate_compared = bool(comparison.get("candidate_compared", best_index != 0))
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(
             f"campaign report has malformed score data: {error}"
@@ -68,18 +92,27 @@ def render_campaign_report(run_directory: Path, output: Path | None = None) -> P
     development.grid(axis="y", alpha=0.25)
     development.legend(loc="lower right")
 
+    protected_labels, protected_scores, protected_colors, protected_title = (
+        _protected_plot_data(
+            baseline_f1=baseline_f1,
+            winner_f1=winner_f1,
+            best_index=best_index,
+            candidate_compared=candidate_compared,
+            accepted=accepted,
+        )
+    )
     protected.bar(
-        ["Baseline", f"Dev winner\n(proposal {best_index})"],
-        [baseline_f1, winner_f1],
-        color=["#64748b", "#16a34a" if accepted else "#dc2626"],
+        protected_labels,
+        protected_scores,
+        color=protected_colors,
     )
     protected.set(
-        title=f"Protected comparison: {'accepted' if accepted else 'baseline retained'}",
+        title=protected_title,
         ylabel="Mean F1",
         ylim=(0, 1),
     )
     protected.grid(axis="y", alpha=0.25)
-    for position, value in enumerate([baseline_f1, winner_f1]):
+    for position, value in enumerate(protected_scores):
         protected.text(position, value + 0.02, f"{value:.3f}", ha="center")
 
     selected = f"Proposal {best_index}" if accepted else "Baseline"

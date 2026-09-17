@@ -8,7 +8,7 @@ from typing import Any
 from nabu_evals.gold import GoldRoot
 from nabu_evals.optimizer import OptimizerSettings, run_optimizer
 from nabu_evals.runtime import DragomanRuntime, RuntimeSettings
-from nabu_evals.target import QualCodingTarget, candidate_hash
+from nabu_evals.target import QualCodingTarget, candidate_hash, coding_profile
 
 
 def guidance_for_hash(output: Path, digest: str) -> str:
@@ -32,6 +32,7 @@ def _comparison_summary(
     winner_index = int(development["best_index"])
     winner_hash = str(development["candidates"][winner_index]["hash"])
     winner = guidance_for_hash(settings.output / "development", winner_hash)
+    candidate_compared = candidate_hash(winner) != candidate_hash(baseline)
     runtime = RuntimeSettings(
         prompts=settings.prompts,
         output=settings.output / "comparison",
@@ -41,6 +42,7 @@ def _comparison_summary(
         bridge_url=settings.bridge_url,
     )
     with DragomanRuntime(runtime) as dragoman:
+        profile = coding_profile(settings.coding_profile)
         target = QualCodingTarget(
             roots=roots,
             runtime=runtime,
@@ -52,11 +54,12 @@ def _comparison_summary(
             max_coding_requests=settings.max_coding_requests,
             total_deadline=time.monotonic() + settings.total_timeout,
             baseline=baseline,
+            profile=profile,
         )
         baseline_scored = target.evaluate_batch([(baseline, root) for root in roots])
         winner_scored = (
             baseline_scored
-            if candidate_hash(winner) == candidate_hash(baseline)
+            if not candidate_compared
             else target.evaluate_batch([(winner, root) for root in roots])
         )
     baseline_scores = [score for score, _ in baseline_scored]
@@ -72,11 +75,12 @@ def _comparison_summary(
         "kind": "protected-comparison",
         "winner_index": winner_index,
         "winner_hash": winner_hash,
+        "candidate_compared": candidate_compared,
         "baseline_mean_f1": sum(baseline_scores) / len(baseline_scores),
         "winner_mean_f1": sum(winner_scores) / len(winner_scores),
         "mean_delta": mean_delta,
         "minimum_root_delta": min(deltas),
-        "accepted": mean_delta > 0 and min(deltas) >= 0,
+        "accepted": candidate_compared and mean_delta > 0 and min(deltas) >= 0,
         "roots": [
             {
                 "root": root.name,

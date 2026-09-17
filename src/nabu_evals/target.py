@@ -22,6 +22,59 @@ class Evaluation:
     result_path: Path
 
 
+@dataclass(frozen=True)
+class CodingProfile:
+    """A named, reproducible evaluator configuration for the frontend pipeline."""
+
+    name: str
+    passthrough: tuple[str, ...]
+    coders: tuple[str, ...]
+    adjudicate: bool
+    allowed_endpoints: frozenset[str]
+
+    def manifest(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "passthrough": list(self.passthrough),
+            "coders": list(self.coders),
+            "adjudicate": self.adjudicate,
+        }
+
+
+_CODING_PROFILES = {
+    "single-coder-direct": CodingProfile(
+        name="single-coder-direct",
+        passthrough=("retrieval", "semantic-filter"),
+        coders=("voter-one",),
+        adjudicate=False,
+        allowed_endpoints=frozenset({"/deep-analysis-filter.voter-one"}),
+    ),
+    "two-voter-adjudicated": CodingProfile(
+        name="two-voter-adjudicated",
+        passthrough=("retrieval", "semantic-filter"),
+        coders=("voter-one", "voter-two"),
+        adjudicate=True,
+        allowed_endpoints=frozenset(
+            {
+                "/deep-analysis-filter.voter-one",
+                "/deep-analysis-filter.voter-two",
+                "/deep-analysis-adjudicate",
+            }
+        ),
+    ),
+}
+
+
+def coding_profile(name: str) -> CodingProfile:
+    try:
+        return _CODING_PROFILES[name]
+    except KeyError as error:
+        available = ", ".join(sorted(_CODING_PROFILES))
+        raise ValueError(
+            f"unknown coding profile {name!r}; choose one of: {available}"
+        ) from error
+
+
 class EvaluationTarget(Protocol):
     """The bounded system that turns a prompt component and gold root into a score."""
 
@@ -41,6 +94,51 @@ def _trim(value: object, limit: int = 320) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _format_duration(seconds: float) -> str:
+    rounded = max(1, round(seconds))
+    minutes, seconds = divmod(rounded, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m {seconds:02d}s"
+
+
+class EvaluationProgress:
+    def __init__(self, total: int, root_total: int) -> None:
+        self.total = total
+        self.root_total = root_total
+        self.completed = 0
+        self.started_at = time.monotonic()
+
+    def _remaining(self) -> str:
+        if self.completed == 0:
+            return "estimated remaining: available after the first root"
+        elapsed = time.monotonic() - self.started_at
+        remaining = elapsed / self.completed * (self.total - self.completed)
+        return f"estimated remaining: {_format_duration(remaining)}"
+
+    def start(self, candidate: str, root_index: int, root: GoldRoot) -> float:
+        print(
+            f"[evaluation {self.completed + 1}/{self.total}] {candidate}: "
+            f"root {root_index + 1}/{self.root_total} ({len(root.documents)} documents) "
+            f"started — {self._remaining()}",
+            flush=True,
+        )
+        return time.monotonic()
+
+    def complete(
+        self, candidate: str, root_index: int, root: GoldRoot, started_at: float
+    ) -> None:
+        self.completed += 1
+        print(
+            f"[evaluation {self.completed}/{self.total}] {candidate}: "
+            f"root {root_index + 1}/{self.root_total} ({len(root.documents)} documents) "
+            f"complete in {_format_duration(time.monotonic() - started_at)} — "
+            f"{self._remaining()}",
+            flush=True,
+        )
+
+
 class QualCodingTarget:
     def __init__(
         self,
@@ -55,6 +153,8 @@ class QualCodingTarget:
         max_coding_requests: int,
         total_deadline: float,
         baseline: str,
+        total_evaluations: int | None = None,
+        profile: CodingProfile | None = None,
     ) -> None:
         self.roots = list(roots)
         self.runtime = runtime
@@ -66,11 +166,15 @@ class QualCodingTarget:
         self.max_coding_requests = max_coding_requests
         self.total_deadline = total_deadline
         self.baseline = baseline.rstrip()
+        self.profile = profile or coding_profile("single-coder-direct")
         self.frontend_invocations = 0
         self.coding_requests = 0
         self._cache: dict[tuple[str, str], Evaluation] = {}
         self._names: dict[str, str] = {}
         self._forbidden = self._forbidden_material()
+        self.progress = EvaluationProgress(
+            total_evaluations or len(self.roots), len(self.roots)
+        )
 
     def _forbidden_material(self) -> list[tuple[str, str]]:
         forbidden: list[tuple[str, str]] = []
@@ -122,10 +226,12 @@ class QualCodingTarget:
                 seen_kinds.add(kind)
         return problems
 
-    def _candidate_name(self, digest: str) -> str:
+    def _candidate_name(self, candidate: str, digest: str) -> str:
         if digest not in self._names:
             self._names[digest] = (
-                "baseline" if not self._names else f"proposal-{len(self._names)}"
+                "baseline"
+                if candidate.rstrip() == self.baseline
+                else f"proposal-{len(self._names)}"
             )
         return self._names[digest]
 
@@ -176,11 +282,11 @@ class QualCodingTarget:
                 "--gateway",
                 runtime.gateway,
                 "--passthrough",
-                "retrieval,semantic-filter",
+                ",".join(self.profile.passthrough),
                 "--coders",
-                "voter-one",
+                ",".join(self.profile.coders),
                 "--adjudicate",
-                "false",
+                str(self.profile.adjudicate).lower(),
                 "--prompt-root",
                 str(runtime.config),
                 "--prompt-hash",
@@ -216,6 +322,15 @@ class QualCodingTarget:
                 json.dumps(results, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            resolver_errors = sum(
+                len((document.get("comparison") or {}).get("errors", []))
+                for document in results.get("documents", [])
+                if isinstance(document, dict)
+            )
+            if resolver_errors:
+                raise RuntimeFailure(
+                    f"root-{root_index + 1} returned {resolver_errors} unresolved annotation span(s)"
+                )
             returned = [
                 document.get("name") for document in results.get("documents", [])
             ]
@@ -235,12 +350,15 @@ class QualCodingTarget:
                     f"({root_requests}>{self.max_coding_requests})"
                 )
             statuses = {document.get("status") for document in results["documents"]}
-            if "failed" in statuses:
-                last_error = "frontend reported a provider or pipeline failure"
-                continue
+            incomplete_statuses = statuses - {"success", "empty"}
+            if incomplete_statuses:
+                names = ", ".join(sorted(str(status) for status in incomplete_statuses))
+                raise RuntimeFailure(
+                    f"root-{root_index + 1} returned incomplete documents: {names}"
+                )
             endpoints = results.get("endpoints", [])
             if any(
-                endpoint != "/deep-analysis-filter.voter-one" for endpoint in endpoints
+                endpoint not in self.profile.allowed_endpoints for endpoint in endpoints
             ):
                 raise RuntimeFailure(f"unexpected endpoint(s): {endpoints}")
             score = float(results.get("soft", {}).get("f1", 0))
@@ -355,7 +473,7 @@ class QualCodingTarget:
                 )
                 if problems:
                     raise ValueError("invalid candidate: " + "; ".join(problems))
-                name = self._candidate_name(digest)
+                name = self._candidate_name(candidate, digest)
                 with CandidateRuntime(
                     self.runtime, candidate, digest, name, self.dragoman_port
                 ) as candidate_runtime:
@@ -364,9 +482,11 @@ class QualCodingTarget:
                     )
                     for _, _, root in uncached:
                         root_index = self.roots.index(root)
+                        started_at = self.progress.start(name, root_index, root)
                         evaluation = self._run_root(
                             candidate, digest, name, candidate_runtime, root, root_index
                         )
+                        self.progress.complete(name, root_index, root, started_at)
                         self._cache[(digest, root.hash)] = evaluation
             for index, _, root in group:
                 evaluation = self._cache[(digest, root.hash)]

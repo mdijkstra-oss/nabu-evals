@@ -7,7 +7,12 @@ import pytest
 
 from nabu_evals.cli import main
 from nabu_evals.generate import split_legacy_codebook
-from nabu_evals.gold import GoldValidationError, coding_job_of, load_gold_root
+from nabu_evals.gold import (
+    GoldValidationError,
+    coding_job_of,
+    coverage_probe,
+    load_gold_root,
+)
 
 
 def _root(
@@ -98,6 +103,50 @@ def test_exports_a_normal_coding_job_without_gold_annotations(tmp_path: Path) ->
         ],
         "documents": [{"path": "a.md", "markdown": "One sentence.\n\n"}],
     }
+
+
+def test_coverage_probe_selects_labels_without_peeking_at_corpus_text(
+    tmp_path: Path,
+) -> None:
+    root_path = _root(
+        tmp_path / "gold",
+        callout_ids=["one", "two", "three"],
+        annotations=[_annotation("one")],
+    )
+    (root_path / "corpus" / "b.md").write_text(
+        "Two and three.\n\n```json-annotations\n"
+        + json.dumps({"annotations": [_annotation("two"), _annotation("three")]})
+        + "\n```\n",
+        encoding="utf-8",
+    )
+    (root_path / "corpus" / "negative.md").write_text(
+        'Nothing.\n\n```json-annotations\n{"annotations": []}\n```\n',
+        encoding="utf-8",
+    )
+    root = load_gold_root(root_path)
+
+    probe = coverage_probe(root, 1)
+
+    assert probe.documents == ("b.md",)
+    assert probe.selection == "coverage-probe-1"
+    assert probe.hash != root.hash
+    assert probe.document_count == 1
+    assert probe.annotations == 2
+    assert probe.negatives == 0
+    assert [document["path"] for document in coding_job_of(probe)["documents"]] == [
+        "b.md"
+    ]
+
+
+def test_coverage_probe_rejects_an_invalid_size(tmp_path: Path) -> None:
+    root = load_gold_root(
+        _root(
+            tmp_path / "gold", callout_ids=["known"], annotations=[_annotation("known")]
+        )
+    )
+
+    with pytest.raises(ValueError, match="positive"):
+        coverage_probe(root, 0)
 
 
 def test_splits_a_legacy_codebook_into_normal_coding_sources(tmp_path: Path) -> None:

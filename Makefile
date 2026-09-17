@@ -10,7 +10,7 @@ BRIDGE_URL ?=
 CHANCERY_PORT ?= 8081
 MODEL_TABLE ?=
 
-.PHONY: dev check test optimize campaign report build-dragoman build-codex-bridge codex-bridge
+.PHONY: dev check test optimize evaluate campaign report audit stability build-dragoman build-codex-bridge codex-bridge
 
 build-dragoman:
 	mkdir -p .dev
@@ -37,8 +37,17 @@ test:
 optimize: build-dragoman
 	uv run nabu-evals optimize --dragoman-bin "$(CURDIR)/$(EVAL_DRAGOMAN)" $(ARGS)
 
+evaluate: build-dragoman
+	uv run nabu-evals evaluate --dragoman-bin "$(CURDIR)/$(EVAL_DRAGOMAN)" $(ARGS)
+
 campaign: build-dragoman
 	uv run nabu-evals campaign --dragoman-bin "$(CURDIR)/$(EVAL_DRAGOMAN)" $(ARGS)
 
 report:
 	uv run nabu-evals report $(ARGS)
+
+audit:
+	uv run nabu-evals audit $(ARGS)
+
+stability:
+	uv run nabu-evals stability $(ARGS)

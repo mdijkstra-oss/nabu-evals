@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from nabu_evals.gold import load_gold_root
-from nabu_evals.runtime import RuntimeSettings
-from nabu_evals.target import QualCodingTarget
+from nabu_evals.runtime import CandidateRuntime, RuntimeFailure, RuntimeSettings
+from nabu_evals.target import QualCodingTarget, coding_profile
 
 
 def _target(tmp_path: Path) -> QualCodingTarget:
@@ -93,4 +96,139 @@ def test_accepts_generic_guidance(tmp_path: Path) -> None:
             "Judge each definition independently, prefer precise complete spans, and abstain when evidence is insufficient."
         )
         == []
+    )
+
+
+def test_rejects_partial_root_without_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = _target(tmp_path)
+    calls = 0
+
+    def coding_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        output = Path(command[command.index("--output") + 1])
+        output.write_text(
+            json.dumps(
+                {
+                    "documents": [
+                        {
+                            "path": "secret-document.md",
+                            "status": "partial",
+                            "annotationCount": None,
+                            "warnings": ["LLM request failed: 503"],
+                            "failures": [],
+                        }
+                    ],
+                    "requests": [{"endpoint": "/deep-analysis-filter.voter-one"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("nabu_evals.target.subprocess.run", coding_run)
+    runtime = CandidateRuntime(
+        target.runtime, "Seed guidance.", "digest", "baseline", 1
+    )
+
+    with pytest.raises(RuntimeFailure, match="partial"):
+        target._run_root(
+            "Seed guidance.",
+            "digest",
+            "baseline",
+            runtime,
+            target.roots[0],
+            0,
+        )
+
+    assert calls == 1
+
+
+def test_rejects_unresolved_annotation_spans_without_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = _target(tmp_path)
+    calls = 0
+    source = (target.roots[0].path / "corpus" / "secret-document.md").read_text(
+        encoding="utf-8"
+    )
+    prose = source.partition("```json-annotations")[0].rstrip()
+
+    def coding_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        output = Path(command[command.index("--output") + 1])
+        output.write_text(
+            json.dumps(
+                {
+                    "documents": [
+                        {
+                            "path": "secret-document.md",
+                            "status": "success",
+                            "annotationCount": 1,
+                            "warnings": [],
+                            "failures": [],
+                            "generatedMarkdown": (
+                                prose
+                                + "\n\n```json-annotations\n"
+                                + json.dumps(
+                                    {
+                                        "annotations": [
+                                            {
+                                                "text": "Not in this document.",
+                                                "reason": "invalid",
+                                                "code": "secret-callout",
+                                                "actor": "model",
+                                            }
+                                        ]
+                                    }
+                                )
+                                + "\n```\n"
+                            ),
+                        }
+                    ],
+                    "requests": [{"endpoint": "/deep-analysis-filter.voter-one"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("nabu_evals.target.subprocess.run", coding_run)
+    runtime = CandidateRuntime(
+        target.runtime, "Seed guidance.", "digest", "baseline", 1
+    )
+
+    with pytest.raises(RuntimeFailure, match="unresolved annotation span"):
+        target._run_root(
+            "Seed guidance.",
+            "digest",
+            "baseline",
+            runtime,
+            target.roots[0],
+            0,
+        )
+
+    assert calls == 1
+
+
+def test_coding_profiles_make_the_evaluation_boundary_explicit() -> None:
+    direct = coding_profile("single-coder-direct")
+    consensus = coding_profile("two-voter-adjudicated")
+
+    assert direct.passthrough == ("retrieval", "semantic-filter")
+    assert direct.coders == ("voter-one",)
+    assert direct.adjudicate is False
+    assert direct.allowed_endpoints == frozenset({"/deep-analysis-filter.voter-one"})
+    assert consensus.passthrough == ("retrieval", "semantic-filter")
+    assert consensus.coders == ("voter-one", "voter-two")
+    assert consensus.adjudicate is True
+    assert consensus.allowed_endpoints == frozenset(
+        {
+            "/deep-analysis-filter.voter-one",
+            "/deep-analysis-filter.voter-two",
+            "/deep-analysis-adjudicate",
+        }
     )

@@ -4,10 +4,12 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass
 from difflib import unified_diff
 from pathlib import Path
@@ -22,11 +24,45 @@ from gepa.optimize_anything import (
 
 from nabu_evals.gold import GoldRoot
 from nabu_evals.runtime import DragomanRuntime, RuntimeSettings
-from nabu_evals.target import QualCodingTarget, candidate_hash
+from nabu_evals.target import QualCodingTarget, candidate_hash, coding_profile
 
 DEFAULT_REFLECTION_MODEL = "codex/gpt-5.6-sol"
-DEFAULT_MODEL_TABLE = "models.codex.yaml"
+EVALUATION_MODEL_TABLES = (
+    "models.evaluation-cli-gpt.yaml",
+    "models.evaluation-cli-gpt-terra-coder-low.yaml",
+    "models.evaluation-cli-gpt-terra-coder-high.yaml",
+    "models.evaluation-cli-gpt-sol-coder-medium.yaml",
+    "models.evaluation-cli-gpt-sol-adjudicator-high.yaml",
+    "models.evaluation-cli-claude.yaml",
+    "models.evaluation-cli-mixed.yaml",
+)
+DEFAULT_MODEL_TABLE = EVALUATION_MODEL_TABLES[0]
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:8084"
+
+
+class _GepaTrace:
+    """Save GEPA chatter without hiding evaluator progress from the terminal."""
+
+    def __init__(self, console: Any, trace: Any) -> None:
+        self.console = console
+        self.trace = trace
+        self.forwarding_progress = False
+
+    def write(self, text: str) -> int:
+        self.trace.write(text)
+        if text.startswith("[evaluation "):
+            self.forwarding_progress = True
+        if self.forwarding_progress:
+            self.console.write(text)
+            if "\n" in text:
+                self.forwarding_progress = False
+        return len(text)
+
+    def flush(self) -> None:
+        self.trace.flush()
+        if self.forwarding_progress:
+            self.console.flush()
+
 
 REFLECTION_TEMPLATE = """You are improving one reusable qualitative-coding guidance component.
 
@@ -65,6 +101,7 @@ class OptimizerSettings:
     total_timeout: int = 7_200
     max_frontend_invocations: int = 100
     max_coding_requests: int = 200
+    coding_profile: str = "single-coder-direct"
 
 
 class PreserveProposalAcceptance:
@@ -228,6 +265,7 @@ class DragomanReflection:
 def run_optimizer(
     settings: OptimizerSettings, roots: Sequence[GoldRoot]
 ) -> dict[str, Any]:
+    settings.output.mkdir(parents=True, exist_ok=True)
     guidance_path = settings.prompts / "config/deep-analysis-filter/coding-guidance.md"
     baseline = guidance_path.read_text(encoding="utf-8").rstrip()
     source_prompt_hash = _tree_hash(settings.prompts / "config/deep-analysis-filter")
@@ -241,6 +279,7 @@ def run_optimizer(
     )
     deadline = time.monotonic() + settings.total_timeout
     with DragomanRuntime(runtime_settings) as dragoman:
+        profile = coding_profile(settings.coding_profile)
         target = QualCodingTarget(
             roots=roots,
             runtime=runtime_settings,
@@ -252,6 +291,8 @@ def run_optimizer(
             max_coding_requests=settings.max_coding_requests,
             total_deadline=deadline,
             baseline=baseline,
+            total_evaluations=(settings.max_candidate_proposals + 1) * len(roots),
+            profile=profile,
         )
         reflection = DragomanReflection(
             gateway=f"http://127.0.0.1:{dragoman.port}",
@@ -286,25 +327,60 @@ def run_optimizer(
                 reflection_prompt_template=REFLECTION_TEMPLATE,
             ),
         )
-        result = optimize_anything(
-            seed_candidate=baseline,
-            batch_evaluator=evaluate,
-            dataset=list(roots),
-            config=config,
+        print(
+            "[reflection] generating one generic coding-guidance proposal; "
+            "detailed optimizer trace is being saved",
+            flush=True,
         )
+        with (
+            (settings.output / "gepa.log").open("w", encoding="utf-8") as trace,
+            redirect_stdout(_GepaTrace(sys.stdout, trace)),
+            redirect_stderr(trace),
+        ):
+            result = optimize_anything(
+                seed_candidate=baseline,
+                batch_evaluator=evaluate,
+                dataset=list(roots),
+                config=config,
+            )
+        print(
+            "[reflection] proposal search complete; rescoring every retained "
+            "candidate on all development roots",
+            flush=True,
+        )
+        candidate_texts = [
+            next(iter(candidate.values())).rstrip() for candidate in result.candidates
+        ]
+        proposal_indices = [
+            index
+            for index, candidate in enumerate(candidate_texts)
+            if candidate != baseline
+        ]
+        if settings.max_candidate_proposals > 0 and not proposal_indices:
+            raise RuntimeError("GEPA did not retain a distinct proposal")
+
+        # GEPA may use a development minibatch to rank a proposed mutation. Its
+        # search score therefore cannot choose a campaign winner. Re-score every
+        # retained candidate over every supplied development root before leaving
+        # the live runtime; cached baseline and minibatch results are reused.
+        development_evaluations = [
+            target.evaluate_batch([(candidate, root) for root in roots])
+            for candidate in candidate_texts
+        ]
 
     if (
         _tree_hash(settings.prompts / "config/deep-analysis-filter")
         != source_prompt_hash
     ):
         raise RuntimeError("source prompt checkout changed during optimizer run")
-    proposal_indices = [
-        index
-        for index, candidate in enumerate(result.candidates)
-        if next(iter(candidate.values())).rstrip() != baseline
+    development_scores = [
+        sum(score for score, _ in evaluations) / len(evaluations)
+        for evaluations in development_evaluations
     ]
-    if settings.max_candidate_proposals > 0 and not proposal_indices:
-        raise RuntimeError("GEPA did not retain a distinct proposal")
+    best_index = max(
+        range(len(development_scores)),
+        key=lambda index: (development_scores[index], -index),
+    )
     summary = {
         "kind": "optimization-set-proposal",
         "holdout_used": False,
@@ -312,23 +388,31 @@ def run_optimizer(
         "source_prompt_hash_after": source_prompt_hash,
         "frontend_invocations": target.frontend_invocations,
         "coding_requests": target.coding_requests,
+        "coding_profile": profile.manifest(),
         "reflection_calls": reflection.calls,
         "candidates": [
             {
                 "index": index,
-                "hash": candidate_hash(next(iter(candidate.values()))),
-                "score": result.val_aggregate_scores[index],
+                "hash": candidate_hash(candidate),
+                "score": development_scores[index],
+                "development_root_scores": [
+                    {"root": root.name, "f1": score}
+                    for root, (score, _) in zip(
+                        roots, development_evaluations[index], strict=True
+                    )
+                ],
+                "gepa_search_score": result.val_aggregate_scores[index],
                 "parent": result.parents[index],
-                "is_best": index == result.best_idx,
+                "is_best": index == best_index,
                 "is_seed": index == 0,
             }
-            for index, candidate in enumerate(result.candidates)
+            for index, candidate in enumerate(candidate_texts)
         ],
-        "best_index": result.best_idx,
+        "best_index": best_index,
+        "gepa_best_index": result.best_idx,
         "proposal_indices": proposal_indices,
     }
-    for index, candidate in enumerate(result.candidates):
-        text = next(iter(candidate.values())).rstrip()
+    for index, text in enumerate(candidate_texts):
         digest = candidate_hash(text)
         directory = next(
             (
@@ -346,9 +430,13 @@ def run_optimizer(
             {
                 "index": index,
                 "hash": digest,
-                "score": result.val_aggregate_scores[index],
+                "score": development_scores[index],
+                "development_root_scores": summary["candidates"][index][
+                    "development_root_scores"
+                ],
+                "gepa_search_score": result.val_aggregate_scores[index],
                 "parent": result.parents[index],
-                "is_best": index == result.best_idx,
+                "is_best": index == best_index,
                 "scope": "supplied optimization roots only",
             },
         )
@@ -369,8 +457,8 @@ def run_optimizer(
     _write_json(
         settings.output / "best.json",
         {
-            "candidate_index": result.best_idx,
-            "candidate_hash": summary["candidates"][result.best_idx]["hash"],
+            "candidate_index": best_index,
+            "candidate_hash": summary["candidates"][best_index]["hash"],
             "scope": "supplied optimization roots only",
         },
     )
